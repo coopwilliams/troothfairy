@@ -1,0 +1,10 @@
+# Troothfairy configuration
+
+# Path to the Obsidian vault (relative to repo root or absolute)
+vault_path: ./orb-vault
+
+# Number of recent completed jobs to show in the menu bar
+max_recent_jobs: 5
+
+# Status directory for inter-process communication
+status_dir: /tmp/troothfairy-status

@@ -35,7 +35,7 @@ Check whether the user's assertion is basically correct.
 
 2. Prefix your response bullet with `#Ω` followed by the original tag character — for example, `#Ω∆` for a block originally tagged `#∆`, or `#Ωƒ` for one tagged `#ƒ`.
 
-3. For sources, add a sub-bullet prefixed with `#¬` followed by the URL and a brief description. Do not pull-quote — link only.
+3. For sources, add a sub-bullet prefixed with `#¬` followed by the full URL and a brief description. Do not pull-quote — link only.
 
 4. If your response includes newly created markdown files, add a sub-bullet prefixed with `#§` with a link to the file. All newly created markdown files must have `#agent-added` as their first line.
 

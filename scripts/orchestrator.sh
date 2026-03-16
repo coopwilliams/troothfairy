@@ -27,6 +27,13 @@ BLACKLIST_FILE="${REPO_ROOT}/sourcing/SOURCING-BLACKLIST.md"
 WHITELIST_FILE="${REPO_ROOT}/sourcing/SOURCING-WHITELIST.md"
 
 # ---------------------------------------------------------------------------
+# Status directory for SwiftBar / external monitoring
+# ---------------------------------------------------------------------------
+source "${SCRIPT_DIR}/lib/config.sh" 2>/dev/null || true
+STATUS_DIR="$(get_config status_dir /tmp/troothfairy-status 2>/dev/null || echo /tmp/troothfairy-status)"
+mkdir -p "$STATUS_DIR"
+
+# ---------------------------------------------------------------------------
 # Sanity checks
 # ---------------------------------------------------------------------------
 if [[ ! -f "$SYSTEM_PROMPT_FILE" ]]; then
@@ -122,6 +129,7 @@ parse_tag_type_char() {
 declare -a PIDS=()
 declare -a TICKET_ID_ARRAY=()
 declare -a STATUS_FILES=()
+declare -a ACTIVE_DESCS=()
 
 while IFS= read -r ticket_id; do
     [[ -z "$ticket_id" ]] && continue
@@ -206,6 +214,13 @@ Remember: edit the file at ${file_path} directly. Do not output the modified fil
     # Status file: subagent writes "0" on success, "1 <message>" on failure
     status_file="${WORK_DIR}/${ticket_id}.status"
 
+    # ---- Build a concise status description for this ticket ----
+    tag_summary=$(printf '%s\n' "$description" | grep '^--- Tag #' | sed 's/^--- Tag //;s/ at line .*//' | tr '\n' ', ' | sed 's/, $//')
+    active_desc="${file_basename} — ${tag_summary}"
+
+    # ---- Write active status file ----
+    printf '%s\n' "$active_desc" > "${STATUS_DIR}/active-${ticket_id}"
+
     # ---- Launch subagent in background ----
     (
         subagent_user_prompt=$(cat "$prompt_file")
@@ -227,6 +242,7 @@ Remember: edit the file at ${file_path} directly. Do not output the modified fil
     PIDS+=("$!")
     TICKET_ID_ARRAY+=("$ticket_id")
     STATUS_FILES+=("$status_file")
+    ACTIVE_DESCS+=("$active_desc")
 
     echo "orchestrator: launched subagent for ticket $ticket_id (file: $file_basename, pid: $!)"
 
@@ -248,9 +264,14 @@ for i in "${!PIDS[@]}"; do
     pid="${PIDS[$i]}"
     ticket_id="${TICKET_ID_ARRAY[$i]}"
     status_file="${STATUS_FILES[$i]}"
+    active_desc="${ACTIVE_DESCS[$i]}"
+    timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
     # Wait for this specific subagent process
     wait "$pid" 2>/dev/null || true
+
+    # Remove active status file
+    rm -f "${STATUS_DIR}/active-${ticket_id}"
 
     # Read status written by subagent
     status_content=""
@@ -259,19 +280,21 @@ for i in "${!PIDS[@]}"; do
     fi
 
     if [[ "$status_content" == "0" ]]; then
-        # Success — close the ticket
+        # Success — close the ticket and log to history
+        printf '%s ✓ %s\n' "$timestamp" "$active_desc" >> "${STATUS_DIR}/history.log"
         if tk close "$ticket_id" 2>/dev/null; then
             echo "orchestrator: ticket $ticket_id closed (success)"
         else
             echo "orchestrator: warning — could not close ticket $ticket_id" >&2
         fi
     else
-        # Failure — add a note and leave the ticket open
+        # Failure — add a note, log to history, leave ticket open
         error_detail="${status_content#1 }"
         if [[ -z "$error_detail" ]]; then
             error_detail="subagent exited with non-zero status"
         fi
         note_msg="Failed: ${error_detail}"
+        printf '%s ✗ %s (failed)\n' "$timestamp" "$active_desc" >> "${STATUS_DIR}/history.log"
         if tk add-note "$ticket_id" "$note_msg" 2>/dev/null; then
             echo "orchestrator: ticket $ticket_id left open with failure note: $note_msg"
         else

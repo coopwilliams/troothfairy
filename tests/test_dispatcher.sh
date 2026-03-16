@@ -77,6 +77,9 @@ chmod +x "${FAKE_BIN}/tk"
 export PATH="${FAKE_BIN}:${PATH}"
 export TK_LOG   # dispatcher inherits this env var (log path is used by stub)
 
+# Stub out the orchestrator so the dispatcher doesn't try to run it
+export ORCHESTRATOR=/usr/bin/true
+
 # ---------------------------------------------------------------------------
 # Build sample vault files
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ VAULT_DIR="${1:-./orb-vault}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 EXCLUSIONS_FILE="${REPO_ROOT}/tf-exclusions.md"
+ORCHESTRATOR="${ORCHESTRATOR:-${SCRIPT_DIR}/orchestrator.sh}"
 
 # Open user tags (UTF-8 multi-byte unicode characters)
 TAG_F='#ƒ'   # alt-f  — explicit instruction
@@ -210,4 +211,11 @@ done < "$MANIFEST"
 # Summary
 # ---------------------------------------------------------------------------
 echo "dispatcher: created ${ticket_count} ticket(s)."
-exit 0
+
+# ---------------------------------------------------------------------------
+# Hand off to the orchestrator if tickets were created
+# ---------------------------------------------------------------------------
+if [[ "$ticket_count" -gt 0 ]]; then
+    echo "dispatcher: invoking orchestrator..."
+    "$ORCHESTRATOR" "$VAULT_DIR"
+fi
