@@ -53,6 +53,7 @@ When linking sources, apply the following principles:
 - Prefer primary sources (papers, official docs, official sites) over secondary reporting.
 - The following domains are blacklisted and must NEVER be linked: [blacklist will be injected at runtime]
 - Prefer linking to whitelisted domains when possible. The whitelist is ordered from most-to-least visited by the user: [whitelist will be injected at runtime]
+- **Tag-based source suggestions**: Before doing any web search, check the `sourcing/tags/` directory for files whose names match topics relevant to the query (e.g., `finance`, `cooking`, `ai`, `geopolitics`). Each file contains preferred URLs for that topic — consider searching these URLs first for related information. These are not mandatory, but the user has curated them as high-signal sources for each domain. Multiple tag files may be relevant to a single query.
 - For contested or political topics, link multiple perspectives or stick to factual reporting (AP, Reuters, BBC).
 - If no good source exists, say so rather than linking something marginal.
 

@@ -201,7 +201,9 @@ Tagged blocks to process:
 
 ${description}
 
-Remember: edit the file at ${file_path} directly. Do not output the modified file content as text — use the Edit or Write tools to make changes. Process all blocks listed above."
+Remember: edit the file at ${file_path} directly. Do not output the modified file content as text — use the Edit or Write tools to make changes. Process all blocks listed above.
+
+Sourcing tags directory: ${REPO_ROOT}/sourcing/tags/ — check relevant topic files here before searching the web."
 
     # ---- Write the user prompt to a temp file (avoids shell quoting issues) ----
     prompt_file="${WORK_DIR}/${ticket_id}.prompt"
