@@ -123,12 +123,12 @@ echo "Recent Jobs | size=11 color=#888888"
 HISTORY_LOG="${STATUS_DIR}/history.log"
 
 if [[ -f "$HISTORY_LOG" ]]; then
-    # Read last N lines; reverse so newest is first
-    mapfile -t recent < <(tail -n "$MAX_RECENT" "$HISTORY_LOG" | tac 2>/dev/null || tail -n "$MAX_RECENT" "$HISTORY_LOG" | tail -r 2>/dev/null || tail -n "$MAX_RECENT" "$HISTORY_LOG")
-    if [[ ${#recent[@]} -eq 0 ]]; then
+    # Read last N lines; reverse so newest is first (tail -r is macOS-native)
+    recent=$(tail -n "$MAX_RECENT" "$HISTORY_LOG" | tail -r 2>/dev/null || tail -n "$MAX_RECENT" "$HISTORY_LOG")
+    if [[ -z "$recent" ]]; then
         echo "No history yet | color=gray"
     else
-        for line in "${recent[@]}"; do
+        echo "$recent" | while IFS= read -r line; do
             [[ -z "$line" ]] && continue
             # Line format: TIMESTAMP STATUS DESCRIPTION
             # STATUS is ✓ or ✗
@@ -142,12 +142,11 @@ if [[ -f "$HISTORY_LOG" ]]; then
             short_ts="${short_ts%:*}"  # trim seconds
 
             if [[ "$status_char" == "✓" ]]; then
-                echo "✓ ${desc}  ${short_ts} | color=green"
+                echo "✓ ${desc}  ${short_ts} | color=green size=12 font=Menlo"
             elif [[ "$status_char" == "✗" ]]; then
-                echo "✗ ${desc}  ${short_ts} | color=red"
+                echo "✗ ${desc}  ${short_ts} | color=red size=12 font=Menlo"
             else
-                # Unknown status — show as-is
-                echo "${line} | color=gray"
+                echo "${line} | color=gray size=12 font=Menlo"
             fi
         done
     fi
