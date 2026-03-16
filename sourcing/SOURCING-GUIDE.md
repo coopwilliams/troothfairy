@@ -1,0 +1,5 @@
+- Link sources, never pull-quote.
+- Prefer primary sources (papers, docs, official sites) over secondary reporting
+- Blacklisted domains are never linked; whitelisted domains are preferred but not required. The whitelist is ordered from most-to-least visited by the user.
+- For contested/political topics, link multiple perspectives or stick to factual reporting (AP, Reuters, BBC)
+- If no good source exists, say so rather than linking something marginal

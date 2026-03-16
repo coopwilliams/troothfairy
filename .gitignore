@@ -1,2 +1,5 @@
 /orb-vault
 .DS_Store
+domains.txt
+SOURCING-BLACKLIST.md
+SOURCING-WHITELIST.md
