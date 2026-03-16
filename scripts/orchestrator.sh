@@ -222,9 +222,36 @@ Sourcing tags directory: ${REPO_ROOT}/sourcing/tags/ — check relevant topic fi
     # Status file: subagent writes "0" on success, "1 <message>" on failure
     status_file="${WORK_DIR}/${ticket_id}.status"
 
-    # ---- Build a concise status description for this ticket ----
-    tag_summary=$(printf '%s\n' "$description" | grep '^--- Tag #' | sed 's/^--- Tag //;s/ at line .*//' | tr '\n' ', ' | sed 's/, $//')
-    active_desc="${file_basename} — ${tag_summary}"
+    # ---- Build per-tag status descriptions with content previews ----
+    # For each tag entry, extract the tag char and a short content preview.
+    # Format: "#∆ Iran war / USO price prediction..."
+    # One line per tag, written to the active status file.
+    active_desc=""
+    while IFS= read -r tag_header; do
+        # Extract tag char (e.g., ∆) from "--- Tag #∆ (evaluate and enrich) at line 5 ---"
+        tag_char=$(printf '%s' "$tag_header" | sed 's/^--- Tag #\(.\).*/\1/')
+        line_num=$(printf '%s' "$tag_header" | sed 's/.*at line \([0-9]*\).*/\1/')
+
+        # Get the first content line after this header (the actual user text)
+        content_line=$(printf '%s\n' "$description" | awk -v hdr="$tag_header" '
+            found && /^[^ \t]/ { exit }
+            found && NF { print; exit }
+            $0 == hdr { found=1 }
+        ')
+
+        # Strip the tag prefix (e.g., "- #∆ " or "#ƒ ") from the content
+        preview=$(printf '%s' "$content_line" | sed 's/^[[:space:]]*-*[[:space:]]*#[^ ]* //')
+
+        # Truncate to ~100 chars
+        if [[ ${#preview} -gt 100 ]]; then
+            preview="${preview:0:97}..."
+        fi
+
+        active_desc+="#${tag_char} ${preview}"$'\n'
+    done < <(printf '%s\n' "$description" | grep '^--- Tag #')
+
+    # Trim trailing newline
+    active_desc="${active_desc%$'\n'}"
 
     # ---- Write active status file ----
     printf '%s\n' "$active_desc" > "${STATUS_DIR}/active-${ticket_id}"
@@ -287,9 +314,12 @@ for i in "${!PIDS[@]}"; do
         status_content=$(cat "$status_file")
     fi
 
+    # Convert user tags (#∆, #ƒ, etc.) to agent tags (#Ω∆, #Ωƒ, etc.) for history
+    history_desc=$(printf '%s' "$active_desc" | sed 's/^#\(.\)/#Ω\1/; s/\n#\(.\)/\n#Ω\1/g')
+
     if [[ "$status_content" == "0" ]]; then
         # Success — close the ticket and log to history
-        printf '%s ✓ %s\n' "$timestamp" "$active_desc" >> "${STATUS_DIR}/history.log"
+        printf '%s ✓ %s\n' "$timestamp" "$history_desc" >> "${STATUS_DIR}/history.log"
         if vtk close "$ticket_id" 2>/dev/null; then
             echo "orchestrator: ticket $ticket_id closed (success)"
         else
@@ -302,7 +332,7 @@ for i in "${!PIDS[@]}"; do
             error_detail="subagent exited with non-zero status"
         fi
         note_msg="Failed: ${error_detail}"
-        printf '%s ✗ %s (failed)\n' "$timestamp" "$active_desc" >> "${STATUS_DIR}/history.log"
+        printf '%s ✗ %s (failed)\n' "$timestamp" "$history_desc" >> "${STATUS_DIR}/history.log"
         if vtk add-note "$ticket_id" "$note_msg" 2>/dev/null; then
             echo "orchestrator: ticket $ticket_id left open with failure note: $note_msg"
         else

@@ -102,9 +102,10 @@ if [[ -d "$STATUS_DIR" ]]; then
     if [[ ${#active_files[@]} -gt 0 && -f "${active_files[0]}" ]]; then
         for f in "${active_files[@]}"; do
             [[ -f "$f" ]] || continue
-            description="$(cat "$f" 2>/dev/null)"
-            [[ -z "$description" ]] && continue
-            echo "✎ ${description} | color=green"
+            while IFS= read -r desc_line; do
+                [[ -z "$desc_line" ]] && continue
+                echo "✎ ${desc_line} | color=green size=12 font=Menlo"
+            done < "$f"
         done
     else
         echo "No active jobs | color=gray"
