@@ -34,6 +34,12 @@ STATUS_DIR="$(get_config status_dir /tmp/troothfairy-status 2>/dev/null || echo 
 mkdir -p "$STATUS_DIR"
 
 # ---------------------------------------------------------------------------
+# Vault-scoped tk: run tk commands from inside the vault so tickets
+# are stored in $VAULT_DIR/.tickets/ (not the repo's .tickets/).
+# ---------------------------------------------------------------------------
+vtk() { (cd "$VAULT_DIR" && tk "$@"); }
+
+# ---------------------------------------------------------------------------
 # Sanity checks
 # ---------------------------------------------------------------------------
 if [[ ! -f "$SYSTEM_PROMPT_FILE" ]]; then
@@ -75,7 +81,7 @@ SYSTEM_PROMPT="${SYSTEM_PROMPT//'[whitelist will be injected at runtime]'/$WHITE
 # ---------------------------------------------------------------------------
 # tk list outputs one ticket ID per line (or a table; we filter to IDs).
 # We use --status=open and --tags=troothfairy to scope the query.
-TICKET_IDS=$(tk list --status=open --tags=troothfairy 2>/dev/null | awk '{print $1}' | grep -E '^[a-zA-Z0-9_-]+$' || true)
+TICKET_IDS=$(vtk list --status=open --tags=troothfairy 2>/dev/null | awk '{print $1}' | grep -E '^[a-zA-Z0-9_-]+$' || true)
 
 if [[ -z "$TICKET_IDS" ]]; then
     echo "orchestrator: no open troothfairy tickets. Nothing to do."
@@ -135,7 +141,7 @@ while IFS= read -r ticket_id; do
     [[ -z "$ticket_id" ]] && continue
 
     # ---- Get full ticket description via tk show ----
-    ticket_body=$(tk show "$ticket_id" 2>/dev/null) || {
+    ticket_body=$(vtk show "$ticket_id" 2>/dev/null) || {
         echo "orchestrator: could not fetch ticket $ticket_id, skipping" >&2
         continue
     }
@@ -284,7 +290,7 @@ for i in "${!PIDS[@]}"; do
     if [[ "$status_content" == "0" ]]; then
         # Success — close the ticket and log to history
         printf '%s ✓ %s\n' "$timestamp" "$active_desc" >> "${STATUS_DIR}/history.log"
-        if tk close "$ticket_id" 2>/dev/null; then
+        if vtk close "$ticket_id" 2>/dev/null; then
             echo "orchestrator: ticket $ticket_id closed (success)"
         else
             echo "orchestrator: warning — could not close ticket $ticket_id" >&2
@@ -297,7 +303,7 @@ for i in "${!PIDS[@]}"; do
         fi
         note_msg="Failed: ${error_detail}"
         printf '%s ✗ %s (failed)\n' "$timestamp" "$active_desc" >> "${STATUS_DIR}/history.log"
-        if tk add-note "$ticket_id" "$note_msg" 2>/dev/null; then
+        if vtk add-note "$ticket_id" "$note_msg" 2>/dev/null; then
             echo "orchestrator: ticket $ticket_id left open with failure note: $note_msg"
         else
             echo "orchestrator: warning — could not add note to ticket $ticket_id" >&2

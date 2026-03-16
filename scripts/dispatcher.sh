@@ -29,6 +29,12 @@ TAG_S='#∑'   # alt-w  — evaluate with full file context
 TAG_C='#©'   # alt-g  — validate/check
 
 # ---------------------------------------------------------------------------
+# Vault-scoped tk: run tk commands from inside the vault so tickets
+# are stored in $VAULT_DIR/.tickets/ (not the repo's .tickets/).
+# ---------------------------------------------------------------------------
+vtk() { (cd "$VAULT_DIR" && tk "$@"); }
+
+# ---------------------------------------------------------------------------
 # TROOTHLOCK: only one dispatcher runs at a time
 # ---------------------------------------------------------------------------
 if [[ -f "$LOCKFILE" ]]; then
@@ -199,7 +205,7 @@ while IFS= read -r file_path; do
     filename=$(basename "$file_path")
     description=$(cat "$sidecar")
 
-    tk create "Troothfairy: ${filename}" \
+    vtk create "Troothfairy: ${filename}" \
         -t task \
         -d "$description" \
         --tags troothfairy,auto
