@@ -308,10 +308,15 @@ assert_contains "system prompt contains #ƒ instructions" "#ƒ" "$CLAUDE_ALL"
 assert_contains "system prompt contains #Ω format rule"  "#Ω" "$CLAUDE_ALL"
 assert_contains "system prompt contains #¡ failure rule" "#¡" "$CLAUDE_ALL"
 
-# 12. --allowedTools flag passed to claude
+# 12. --allowedTools flag passed to claude (without Bash by default)
 assert_contains "claude called with --allowedTools" "--allowedTools" "$CLAUDE_ALL"
+assert_contains "default tools include Edit" "Edit" "$CLAUDE_ALL"
+assert_not_contains "default tools exclude Bash" "Bash" "$CLAUDE_ALL"
 
-# 13. No add-note calls in successful run
+# 13. Default model is sonnet
+assert_contains "default model is sonnet" "--model sonnet" "$CLAUDE_ALL"
+
+# 14. No add-note calls in successful run
 # (There should be no "add-note" in the TK log for success-only run)
 if printf '%s\n' "$TK_ALL" | grep -qF "add-note"; then
     fail "no add-note calls expected in all-success run"
@@ -416,6 +421,67 @@ assert_eq "no claude calls when no tickets" "0" "$empty_claude_count"
 
 # 21. Output contains informative message
 assert_contains "output mentions no tickets" "no open troothfairy tickets" "$ORCH_EMPTY_OUTPUT"
+
+echo ""
+
+# ---------------------------------------------------------------------------
+# ── TEST SUITE 4: Modifier overrides (#bash, #opus) ─────────────────────────
+# When tag blocks contain #bash or #opus, the subagent should use those.
+# ---------------------------------------------------------------------------
+echo "=== Suite 4: Modifier overrides ==="
+
+# Restore the full tk stub
+cat > "${FAKE_BIN}/tk" << 'TKSTUB4'
+#!/usr/bin/env bash
+printf '<<TK-CALL>> %s\n' "$*" >> "$TK_LOG"
+
+case "$1" in
+    list)
+        printf '%s\n' "$TICKET_A"
+        exit 0
+        ;;
+    show)
+        ticket_id="$2"
+        show_file="${TICKET_DATA_DIR}/${ticket_id}"
+        if [[ -f "$show_file" ]]; then
+            cat "$show_file"
+            exit 0
+        fi
+        exit 1
+        ;;
+    close) exit 0 ;;
+    add-note) exit 0 ;;
+    *) exit 1 ;;
+esac
+TKSTUB4
+chmod +x "${FAKE_BIN}/tk"
+
+# Modify ticket A to include #bash and #opus modifiers
+cat > "${TICKET_DATA_DIR}/${TICKET_A}" << EOF
+Troothfairy: file_a.md
+
+--- Tag #ƒ (explicit instruction) at line 1 ---
+- #ƒ Run this script and check output #bash #opus
+
+EOF
+
+rm -f "$TK_LOG" "$CLAUDE_LOG"
+touch "$TK_LOG" "$CLAUDE_LOG"
+export CLAUDE_FAIL_TICKET=""
+
+ORCH_MOD_OUTPUT=$("$ORCHESTRATOR" "$VAULT_DIR" 2>&1)
+
+if [[ -f "$CLAUDE_LOG" ]]; then
+    CLAUDE_MOD=$(cat "$CLAUDE_LOG")
+else
+    CLAUDE_MOD=""
+fi
+
+# 22. #opus modifier sets model to opus
+assert_contains "opus modifier sets --model opus" "--model opus" "$CLAUDE_MOD"
+
+# 23. #bash modifier adds Bash to allowedTools
+assert_contains "bash modifier adds Bash tool" "Bash" "$CLAUDE_MOD"
 
 echo ""
 

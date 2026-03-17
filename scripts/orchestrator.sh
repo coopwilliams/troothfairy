@@ -180,6 +180,24 @@ while IFS= read -r ticket_id; do
         needs_full_file=true
     fi
 
+    # ---- Detect per-ticket modifiers from tag block content ----
+    # Users can add #bash, #opus, #sonnet, #haiku inline with their tags
+    # to override defaults for that ticket's subagent.
+    subagent_model="sonnet"
+    subagent_tools="Edit,Read,Write,WebSearch,WebFetch"
+
+    if printf '%s\n' "$description" | grep -qiF '#opus'; then
+        subagent_model="opus"
+    elif printf '%s\n' "$description" | grep -qiF '#haiku'; then
+        subagent_model="haiku"
+    elif printf '%s\n' "$description" | grep -qiF '#sonnet'; then
+        subagent_model="sonnet"
+    fi
+
+    if printf '%s\n' "$description" | grep -qiF '#bash'; then
+        subagent_tools="Edit,Read,Write,Bash,WebSearch,WebFetch"
+    fi
+
     # ---- Build the user prompt ----
     # Start with file identification
     user_prompt="You are processing the Obsidian vault file: ${file_path}
@@ -281,14 +299,18 @@ ${summary_input}" \
     printf '%s\n' "$active_desc" > "${STATUS_DIR}/active-${ticket_id}"
 
     # ---- Launch subagent in background ----
+    # Capture loop variables for the subshell (background fork snapshots these)
+    _model="$subagent_model"
+    _tools="$subagent_tools"
     (
         subagent_user_prompt=$(cat "$prompt_file")
         subagent_system=$(cat "$system_prompt_file")
 
         if claude \
+            --model "$_model" \
             -p "$subagent_user_prompt" \
             --system-prompt "$subagent_system" \
-            --allowedTools "Edit,Read,Write,Bash,WebSearch,WebFetch" \
+            --allowedTools "$_tools" \
             2>"${WORK_DIR}/${ticket_id}.stderr"; then
             printf '0' > "$status_file"
         else
