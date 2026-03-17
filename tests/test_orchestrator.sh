@@ -81,6 +81,8 @@ trap cleanup EXIT
 
 export TK_LOG
 export CLAUDE_LOG
+export STATUS_DIR="${TMPDIR_ROOT}/status"
+mkdir -p "$STATUS_DIR"
 export CLAUDE_FAIL_TICKET
 export VAULT_DIR
 

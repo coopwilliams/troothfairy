@@ -30,7 +30,7 @@ WHITELIST_FILE="${REPO_ROOT}/sourcing/SOURCING-WHITELIST.md"
 # Status directory for SwiftBar / external monitoring
 # ---------------------------------------------------------------------------
 source "${SCRIPT_DIR}/lib/config.sh" 2>/dev/null || true
-STATUS_DIR="$(get_config status_dir /tmp/troothfairy-status 2>/dev/null || echo /tmp/troothfairy-status)"
+STATUS_DIR="${STATUS_DIR:-$(get_config status_dir /tmp/troothfairy-status 2>/dev/null || echo /tmp/troothfairy-status)}"
 mkdir -p "$STATUS_DIR"
 
 # ---------------------------------------------------------------------------
@@ -389,12 +389,14 @@ for i in "${!PIDS[@]}"; do
         status_content=$(cat "$status_file")
     fi
 
-    # Convert user tags (#∆, #ƒ, etc.) to agent tags (#Ω∆, #Ωƒ, etc.) for history
-    history_desc=$(printf '%s' "$active_desc" | sed 's/^#\(.\)/#Ω\1/; s/\n#\(.\)/\n#Ω\1/g')
-
+    # Write each tag line as its own history entry, converting user tags
+    # (#∆, #ƒ, etc.) to agent tags (#Ω∆, #Ωƒ, etc.)
     if [[ "$status_content" == "0" ]]; then
-        # Success — close the ticket and log to history
-        printf '%s ✓ %s\n' "$timestamp" "$history_desc" >> "${STATUS_DIR}/history.log"
+        while IFS= read -r tag_line; do
+            [[ -z "$tag_line" ]] && continue
+            history_line=$(printf '%s' "$tag_line" | sed 's/^#\(.\)/#Ω\1/')
+            printf '%s ✓ %s\n' "$timestamp" "$history_line" >> "${STATUS_DIR}/history.log"
+        done <<< "$active_desc"
         if vtk close "$ticket_id" 2>/dev/null; then
             echo "orchestrator: ticket $ticket_id closed (success)"
         else
@@ -407,7 +409,11 @@ for i in "${!PIDS[@]}"; do
             error_detail="subagent exited with non-zero status"
         fi
         note_msg="Failed: ${error_detail}"
-        printf '%s ✗ %s (failed)\n' "$timestamp" "$history_desc" >> "${STATUS_DIR}/history.log"
+        while IFS= read -r tag_line; do
+            [[ -z "$tag_line" ]] && continue
+            history_line=$(printf '%s' "$tag_line" | sed 's/^#\(.\)/#Ω\1/')
+            printf '%s ✗ %s\n' "$timestamp" "$history_line" >> "${STATUS_DIR}/history.log"
+        done <<< "$active_desc"
         if vtk add-note "$ticket_id" "$note_msg" 2>/dev/null; then
             echo "orchestrator: ticket $ticket_id left open with failure note: $note_msg"
         else
