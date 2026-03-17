@@ -205,6 +205,20 @@ cat > "${FAKE_BIN}/claude" << 'CLAUDESTUB'
 #!/usr/bin/env bash
 # Log all arguments
 full_args="$*"
+
+# Detect haiku summarization calls vs main subagent calls
+if printf '%s\n' "$full_args" | grep -qF -- '--model haiku'; then
+    # Summarization call — log separately and produce mock summaries
+    printf '<<HAIKU-CALL>>\n%s\n<<END-HAIKU-CALL>>\n' "$full_args" >> "$CLAUDE_LOG"
+    # Extract tag lines from the prompt and generate mock summaries
+    # Input contains lines like "Tag #∆: Transformer models use self-attention."
+    printf '%s\n' "$full_args" | grep -oE 'Tag #(.): [^$]+' | while IFS= read -r tagline; do
+        tc=$(printf '%s' "$tagline" | sed 's/^Tag #\(.\).*/\1/')
+        printf '#%s Summarized task\n' "$tc"
+    done
+    exit 0
+fi
+
 printf '<<CLAUDE-CALL>>\n%s\n<<END-CLAUDE-CALL>>\n' "$full_args" >> "$CLAUDE_LOG"
 
 # Check if we should simulate failure for a specific ticket
