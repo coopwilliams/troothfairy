@@ -107,12 +107,11 @@ extract_block() {
 # Merge results from all four tags and sort by file path then line number.
 # ---------------------------------------------------------------------------
 GREP_RESULTS=$(
-    {
-        grep -rn --include='*.md' -F "$TAG_F" "$VAULT_DIR" 2>/dev/null || true
-        grep -rn --include='*.md' -F "$TAG_D" "$VAULT_DIR" 2>/dev/null || true
-        grep -rn --include='*.md' -F "$TAG_S" "$VAULT_DIR" 2>/dev/null || true
-        grep -rn --include='*.md' -F "$TAG_C" "$VAULT_DIR" 2>/dev/null || true
-    } | sort -t: -k1,1 -k2,2n
+    grep -rn --include='*.md' -F \
+        -e "$TAG_F" -e "$TAG_D" -e "$TAG_S" -e "$TAG_C" \
+        "$VAULT_DIR" 2>/dev/null \
+    | sort -t: -k1,1 -k2,2n \
+    || true
 )
 
 # ---------------------------------------------------------------------------

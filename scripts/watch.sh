@@ -93,6 +93,7 @@ cmd_start() {
     # include \.md$ to get only Markdown files.
     (
         fswatch \
+            --latency 0.1 \
             --one-per-batch \
             -r \
             -e '.*' \

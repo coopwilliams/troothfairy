@@ -297,35 +297,7 @@ Sourcing tags directory: ${REPO_ROOT}/sourcing/tags/ — check relevant topic fi
         summary_input+="${tag_preview}"$'\n'
     done <<< "$active_desc"
 
-    if [[ -n "$summary_input" ]]; then
-        summary_result=$(claude \
-            --model haiku \
-            -p "For each line below, rewrite it as a 3-8 word imperative command. Keep the #X prefix exactly as-is. Output ONLY the rewritten lines, one per input line, nothing else.
-
-${summary_input}" \
-            2>/dev/null) || summary_result=""
-
-        # Validate: first line must start with # (reject error messages)
-        if [[ -n "$summary_result" ]] && printf '%s' "$summary_result" | head -1 | grep -q '^#'; then
-            # Rebuild active_desc with summaries, re-attaching vault paths
-            new_desc=""
-            idx=0
-            while IFS= read -r sum_line; do
-                [[ -z "$sum_line" ]] && continue
-                # Get the vault path from the corresponding raw line
-                raw_line=$(printf '%s\n' "$active_desc" | sed -n "$((idx + 1))p")
-                vpath="${raw_line#*$'\t'}"
-                new_desc+="${sum_line}"$'\t'"${vpath}"$'\n'
-                idx=$((idx + 1))
-            done <<< "$summary_result"
-            new_desc="${new_desc%$'\n'}"
-            if [[ -n "$new_desc" ]]; then
-                active_desc="$new_desc"
-            fi
-        fi
-    fi
-
-    # ---- Write active status file ----
+    # ---- Write raw previews to active status file immediately ----
     printf '%s\n' "$active_desc" > "${STATUS_DIR}/active-${ticket_id}"
 
     # ---- Launch subagent in background ----
@@ -356,6 +328,38 @@ ${summary_input}" \
     ACTIVE_DESCS+=("$active_desc")
 
     echo "orchestrator: launched subagent for ticket $ticket_id (file: $file_basename, pid: $!)"
+
+    # ---- Improve status display with haiku summary (background, non-blocking) ----
+    # Runs concurrently with the subagent; overwrites active status file on success.
+    if [[ -n "$summary_input" ]]; then
+        _raw_desc="$active_desc"
+        _sid="${STATUS_DIR}/active-${ticket_id}"
+        (
+            summary_result=$(claude \
+                --model haiku \
+                -p "For each line below, rewrite it as a 3-8 word imperative command. Keep the #X prefix exactly as-is. Output ONLY the rewritten lines, one per input line, nothing else.
+
+${summary_input}" \
+                2>/dev/null) || summary_result=""
+
+            # Validate: first line must start with # (reject error messages)
+            if [[ -n "$summary_result" ]] && printf '%s' "$summary_result" | head -1 | grep -q '^#'; then
+                new_desc=""
+                idx=0
+                while IFS= read -r sum_line; do
+                    [[ -z "$sum_line" ]] && continue
+                    raw_line=$(printf '%s\n' "$_raw_desc" | sed -n "$((idx + 1))p")
+                    vpath="${raw_line#*$'\t'}"
+                    new_desc+="${sum_line}"$'\t'"${vpath}"$'\n'
+                    idx=$((idx + 1))
+                done <<< "$summary_result"
+                new_desc="${new_desc%$'\n'}"
+                if [[ -n "$new_desc" ]]; then
+                    printf '%s\n' "$new_desc" > "$_sid"
+                fi
+            fi
+        ) &
+    fi
 
 done <<< "$TICKET_IDS"
 
