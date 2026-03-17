@@ -108,6 +108,7 @@ extract_block() {
 # ---------------------------------------------------------------------------
 GREP_RESULTS=$(
     grep -rn --include='*.md' -F \
+        --exclude-dir='.tickets' \
         -e "$TAG_F" -e "$TAG_D" -e "$TAG_S" -e "$TAG_C" \
         "$VAULT_DIR" 2>/dev/null \
     | sort -t: -k1,1 -k2,2n \

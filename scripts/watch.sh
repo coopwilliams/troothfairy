@@ -99,6 +99,7 @@ cmd_start() {
             -e '.*' \
             -i '\.md$' \
             -e '\.obsidian' \
+            -e '\.tickets' \
             "$vault_dir" \
             | while read -r _event; do
                 "$DISPATCHER" "$vault_dir" </dev/null
