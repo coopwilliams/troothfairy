@@ -67,6 +67,21 @@ if [[ -f "$WHITELIST_FILE" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Load configured directories from config.yaml
+# ---------------------------------------------------------------------------
+DIRS_PROMPT_SECTION=""
+while IFS=' ' read -r dir_path dir_access; do
+    [[ -z "$dir_path" ]] && continue
+    case "$dir_access" in
+        read)            access_label="read-only" ;;
+        write)           access_label="write-only" ;;
+        read-write|rw)   access_label="read-write" ;;
+        *)               access_label="${dir_access:-read-only}" ;;
+    esac
+    DIRS_PROMPT_SECTION+="- ${dir_path} [${access_label}]"$'\n'
+done < <(get_dirs 2>/dev/null || true)
+
+# ---------------------------------------------------------------------------
 # Load and patch the system prompt:
 #   Replace the two runtime-injection placeholders with actual content.
 # ---------------------------------------------------------------------------
@@ -232,9 +247,14 @@ Tagged blocks to process:
 
 ${description}
 
-Remember: edit the file at ${file_path} directly. Do not output the modified file content as text — use the Edit or Write tools to make changes. Process all blocks listed above.
+Remember: edit the file at ${file_path} directly. Do not output the modified file content as text — use the Edit or Write tools to make changes. Process all blocks listed above."
 
-Sourcing tags directory: ${REPO_ROOT}/sourcing/tags/ — check relevant topic files here before searching the web."
+    if [[ -n "$DIRS_PROMPT_SECTION" ]]; then
+        user_prompt+="
+
+Configured directories (respect the stated access level — read-only means do not write or delete):
+${DIRS_PROMPT_SECTION}"
+    fi
 
     # ---- Write the user prompt to a temp file (avoids shell quoting issues) ----
     prompt_file="${WORK_DIR}/${ticket_id}.prompt"

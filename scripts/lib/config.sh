@@ -35,6 +35,30 @@ get_config() {
     printf '%s' "${val:-$default}"
 }
 
+# get_dirs — print configured directory entries, one per line as "absolute_path access"
+# Parses the dirs: list block from config.yaml; resolves relative paths against repo root.
+get_dirs() {
+    local repo_root
+    repo_root="$(resolve_repo_root)" || return 0
+    local config_file="${repo_root}/config.yaml"
+    [[ -f "$config_file" ]] || return 0
+    awk -v repo_root="$repo_root" '
+    /^dirs:/              { in_dirs=1; next }
+    in_dirs && /^[^[:space:]]/ { in_dirs=0 }
+    in_dirs && /^[[:space:]]*-[[:space:]]/ {
+        line = $0
+        sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+        sub(/[[:space:]]*#.*$/, "", line)
+        if (length(line) == 0) next
+        n = split(line, parts, /[[:space:]]+/)
+        path   = parts[1]
+        access = (n >= 2) ? parts[2] : "read"
+        if (substr(path, 1, 1) != "/") path = repo_root "/" path
+        print path " " access
+    }
+    ' "$config_file"
+}
+
 # resolve_vault_path — returns absolute vault path from config
 resolve_vault_path() {
     local vault_path

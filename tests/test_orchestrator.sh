@@ -487,6 +487,69 @@ assert_contains "bash modifier adds Bash tool" "Bash" "$CLAUDE_MOD"
 echo ""
 
 # ---------------------------------------------------------------------------
+# ── TEST SUITE 5: Configured directory injection ──────────────────────────────
+# config.yaml declares dirs; verify they appear in subagent prompts with
+# correct access labels.
+# ---------------------------------------------------------------------------
+echo "=== Suite 5: Configured directory injection ==="
+
+# Restore full tk stub with both tickets
+cat > "${FAKE_BIN}/tk" << 'TKSTUB5'
+#!/usr/bin/env bash
+printf '<<TK-CALL>> %s\n' "$*" >> "$TK_LOG"
+case "$1" in
+    list)
+        printf '%s\n' "$TICKET_A"
+        printf '%s\n' "$TICKET_B"
+        exit 0
+        ;;
+    show)
+        ticket_id="$2"
+        show_file="${TICKET_DATA_DIR}/${ticket_id}"
+        [[ -f "$show_file" ]] && { cat "$show_file"; exit 0; }
+        exit 1
+        ;;
+    close)   exit 0 ;;
+    add-note) exit 0 ;;
+    *) exit 1 ;;
+esac
+TKSTUB5
+chmod +x "${FAKE_BIN}/tk"
+
+# Restore ticket A to original (no modifiers)
+cat > "${TICKET_DATA_DIR}/${TICKET_A}" << EOF
+Troothfairy: file_a.md
+
+--- Tag #∆ (evaluate and enrich) at line 1 ---
+- #∆ Transformer models use self-attention.
+	- Child context bullet
+
+--- Tag #© (validate/check) at line 3 ---
+- #© The speed of light is approximately 3e8 m/s.
+
+EOF
+
+rm -f "$TK_LOG" "$CLAUDE_LOG"
+touch "$TK_LOG" "$CLAUDE_LOG"
+export CLAUDE_FAIL_TICKET=""
+
+ORCH_DIRS_OUTPUT=$("$ORCHESTRATOR" "$VAULT_DIR" 2>&1)
+
+if [[ -f "$CLAUDE_LOG" ]]; then
+    CLAUDE_DIRS=$(cat "$CLAUDE_LOG")
+else
+    CLAUDE_DIRS=""
+fi
+
+# config.yaml has: dirs: - ./sourcing/tags read
+# Orchestrator should resolve to an absolute path containing "sourcing/tags"
+assert_contains "configured dir path injected into prompt"     "sourcing/tags"  "$CLAUDE_DIRS"
+assert_contains "configured dir access label in prompt"        "read-only"      "$CLAUDE_DIRS"
+assert_contains "configured dirs section header in prompt"     "Configured directories" "$CLAUDE_DIRS"
+
+echo ""
+
+# ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
 printf 'Results: %d passed, %d failed.\n' "$PASS" "$FAIL"

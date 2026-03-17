@@ -8,3 +8,9 @@ max_recent_jobs: 5
 
 # Status directory for inter-process communication
 status_dir: /tmp/troothfairy-status
+
+# Directories accessible to subagents.
+# Each entry: "path access" where access is read | write | read-write
+# Relative paths are resolved from the repo root.
+dirs:
+  - ./sourcing/tags read
