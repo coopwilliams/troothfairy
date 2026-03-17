@@ -164,6 +164,11 @@ while IFS= read -r ticket_id; do
         continue
     }
 
+    # Vault-relative path (strip vault dir prefix and leading slash), without .md
+    vault_rel="${file_path#"$VAULT_DIR"}"
+    vault_rel="${vault_rel#/}"
+    vault_rel="${vault_rel%.md}"
+
     # ---- Extract the description block (everything after the title line) ----
     # tk show format may vary; we capture everything that looks like tag entries.
     # Tag entry lines begin with "--- Tag #"
@@ -280,15 +285,16 @@ ${summary_input}" \
         --max-budget-usd 0.01 2>/dev/null) || summary_result=""
 
     # Parse summaries or fall back to raw previews
+    # Each line: #X summary\tvault/relative/path (tab-separated for SwiftBar)
     active_desc=""
     for idx in "${!tag_chars[@]}"; do
         tc="${tag_chars[$idx]}"
         # Try to find this tag's summary in Claude's output
         matched_line=$(printf '%s\n' "$summary_result" | grep "^#${tc} " | head -1)
         if [[ -n "$matched_line" ]]; then
-            active_desc+="${matched_line}"$'\n'
+            active_desc+="${matched_line}"$'\t'"${vault_rel}"$'\n'
         else
-            active_desc+="#${tc} ${raw_previews[$idx]}"$'\n'
+            active_desc+="#${tc} ${raw_previews[$idx]}"$'\t'"${vault_rel}"$'\n'
         fi
     done
 

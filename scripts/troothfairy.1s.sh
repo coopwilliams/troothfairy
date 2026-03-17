@@ -102,9 +102,14 @@ if [[ -d "$STATUS_DIR" ]]; then
     if [[ ${#active_files[@]} -gt 0 && -f "${active_files[0]}" ]]; then
         for f in "${active_files[@]}"; do
             [[ -f "$f" ]] || continue
-            while IFS= read -r desc_line; do
-                [[ -z "$desc_line" ]] && continue
-                echo "✎ ${desc_line} | color=green size=12 font=Menlo"
+            while IFS=$'\t' read -r desc_text obs_path; do
+                [[ -z "$desc_text" ]] && continue
+                if [[ -n "$obs_path" ]]; then
+                    encoded_path=$(printf '%s' "$obs_path" | sed 's/ /%20/g')
+                    echo "✎ ${desc_text} | color=green size=12 font=Menlo bash=/usr/bin/open param1=obsidian://open?vault=${VAULT_NAME}&file=${encoded_path} terminal=false"
+                else
+                    echo "✎ ${desc_text} | color=green size=12 font=Menlo"
+                fi
             done < "$f"
         done
     else
@@ -131,21 +136,36 @@ if [[ -f "$HISTORY_LOG" ]]; then
     else
         echo "$recent" | while IFS= read -r line; do
             [[ -z "$line" ]] && continue
-            # Line format: TIMESTAMP STATUS DESCRIPTION
+            # Line format: TIMESTAMP STATUS DESC_TEXT\tVAULT_PATH
             # STATUS is ✓ or ✗
             timestamp="${line%% *}"
             rest="${line#* }"
             status_char="${rest%% *}"
-            desc="${rest#* }"
+            desc_with_path="${rest#* }"
 
-            # Format the timestamp for display (strip seconds if desired)
+            # Split desc from vault path on tab
+            desc_text="${desc_with_path%%$'\t'*}"
+            obs_path="${desc_with_path#*$'\t'}"
+            # If no tab was found, obs_path equals desc_text
+            if [[ "$obs_path" == "$desc_text" ]]; then
+                obs_path=""
+            fi
+
+            # Format the timestamp for display
             short_ts="${timestamp%%T*} ${timestamp##*T}"
             short_ts="${short_ts%:*}"  # trim seconds
 
+            # Build click action if we have a path
+            click=""
+            if [[ -n "$obs_path" ]]; then
+                encoded_path=$(printf '%s' "$obs_path" | sed 's/ /%20/g')
+                click=" bash=/usr/bin/open param1=obsidian://open?vault=${VAULT_NAME}&file=${encoded_path} terminal=false"
+            fi
+
             if [[ "$status_char" == "✓" ]]; then
-                echo "✓ ${desc}  ${short_ts} | color=green size=12 font=Menlo"
+                echo "✓ ${desc_text}  ${short_ts} | color=green size=12 font=Menlo${click}"
             elif [[ "$status_char" == "✗" ]]; then
-                echo "✗ ${desc}  ${short_ts} | color=red size=12 font=Menlo"
+                echo "✗ ${desc_text}  ${short_ts} | color=red size=12 font=Menlo${click}"
             else
                 echo "${line} | color=gray size=12 font=Menlo"
             fi
