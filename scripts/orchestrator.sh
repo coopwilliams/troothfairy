@@ -288,6 +288,42 @@ Sourcing tags directory: ${REPO_ROOT}/sourcing/tags/ — check relevant topic fi
     # Trim trailing newline
     active_desc="${active_desc%$'\n'}"
 
+    # ---- Summarize with Claude haiku (cheap/fast) ----
+    # Feed the raw previews to haiku and ask for 3-8 word imperative summaries.
+    # On success, overwrite active_desc; on failure, keep raw previews.
+    summary_input=""
+    while IFS=$'\t' read -r tag_preview _path; do
+        [[ -z "$tag_preview" ]] && continue
+        summary_input+="${tag_preview}"$'\n'
+    done <<< "$active_desc"
+
+    if [[ -n "$summary_input" ]]; then
+        summary_result=$(claude \
+            --model haiku \
+            -p "For each line below, rewrite it as a 3-8 word imperative command. Keep the #X prefix exactly as-is. Output ONLY the rewritten lines, one per input line, nothing else.
+
+${summary_input}" \
+            --max-budget-usd 0.01 2>/dev/null) || summary_result=""
+
+        if [[ -n "$summary_result" ]]; then
+            # Rebuild active_desc with summaries, re-attaching vault paths
+            new_desc=""
+            idx=0
+            while IFS= read -r sum_line; do
+                [[ -z "$sum_line" ]] && continue
+                # Get the vault path from the corresponding raw line
+                raw_line=$(printf '%s\n' "$active_desc" | sed -n "$((idx + 1))p")
+                vpath="${raw_line#*$'\t'}"
+                new_desc+="${sum_line}"$'\t'"${vpath}"$'\n'
+                idx=$((idx + 1))
+            done <<< "$summary_result"
+            new_desc="${new_desc%$'\n'}"
+            if [[ -n "$new_desc" ]]; then
+                active_desc="$new_desc"
+            fi
+        fi
+    fi
+
     # ---- Write active status file ----
     printf '%s\n' "$active_desc" > "${STATUS_DIR}/active-${ticket_id}"
 
