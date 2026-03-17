@@ -32,7 +32,7 @@ TAG_C='#©'   # alt-g  — validate/check
 # Vault-scoped tk: run tk commands from inside the vault so tickets
 # are stored in $VAULT_DIR/.tickets/ (not the repo's .tickets/).
 # ---------------------------------------------------------------------------
-vtk() { (cd "$VAULT_DIR" && tk "$@"); }
+vtk() { TICKETS_DIR="${VAULT_DIR}/.tickets" tk "$@"; }
 
 # ---------------------------------------------------------------------------
 # TROOTHLOCK: only one dispatcher runs at a time
