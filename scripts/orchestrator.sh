@@ -32,6 +32,8 @@ WHITELIST_FILE="${REPO_ROOT}/sourcing/SOURCING-WHITELIST.md"
 source "${SCRIPT_DIR}/lib/config.sh" 2>/dev/null || true
 STATUS_DIR="${STATUS_DIR:-$(get_config status_dir /tmp/troothfairy-status 2>/dev/null || echo /tmp/troothfairy-status)}"
 mkdir -p "$STATUS_DIR"
+# Clear any stale active-* files left over from a previous crashed/interrupted run
+rm -f "${STATUS_DIR}"/active-*
 
 # ---------------------------------------------------------------------------
 # Vault-scoped tk: run tk commands from inside the vault so tickets
@@ -354,7 +356,8 @@ ${summary_input}" \
                     idx=$((idx + 1))
                 done <<< "$summary_result"
                 new_desc="${new_desc%$'\n'}"
-                if [[ -n "$new_desc" ]]; then
+                # Only write if the file still exists (subagent may have already finished and cleaned up)
+                if [[ -n "$new_desc" ]] && [[ -f "$_sid" ]]; then
                     printf '%s\n' "$new_desc" > "$_sid"
                 fi
             fi
