@@ -303,9 +303,10 @@ Sourcing tags directory: ${REPO_ROOT}/sourcing/tags/ — check relevant topic fi
             -p "For each line below, rewrite it as a 3-8 word imperative command. Keep the #X prefix exactly as-is. Output ONLY the rewritten lines, one per input line, nothing else.
 
 ${summary_input}" \
-            --max-budget-usd 0.01 2>/dev/null) || summary_result=""
+            2>/dev/null) || summary_result=""
 
-        if [[ -n "$summary_result" ]]; then
+        # Validate: first line must start with # (reject error messages)
+        if [[ -n "$summary_result" ]] && printf '%s' "$summary_result" | head -1 | grep -q '^#'; then
             # Rebuild active_desc with summaries, re-attaching vault paths
             new_desc=""
             idx=0
