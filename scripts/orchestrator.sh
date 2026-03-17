@@ -245,58 +245,45 @@ Sourcing tags directory: ${REPO_ROOT}/sourcing/tags/ — check relevant topic fi
     # Status file: subagent writes "0" on success, "1 <message>" on failure
     status_file="${WORK_DIR}/${ticket_id}.status"
 
-    # ---- Build per-tag status descriptions via Claude summarization ----
-    # Ask Claude (haiku, cheap/fast) to summarize each tag block as a short
-    # imperative command, e.g. "Rec blogs based on existing sources".
-    # Format: one line per tag, "#∆ <summary>"
-    # Falls back to raw content preview if summarization fails.
+    # ---- Build per-tag status descriptions from content previews ----
+    # Extract the first line of each tag block, strip the tag prefix,
+    # and truncate to ~60 chars. Format: #X preview\tvault/rel/path
+    active_desc=""
+    line_idx=0
+    while IFS= read -r desc_line; do
+        line_idx=$((line_idx + 1))
+        # Only process tag header lines
+        case "$desc_line" in
+            '--- Tag #'*) ;;
+            *) continue ;;
+        esac
 
-    # First, collect tag chars and raw previews as fallback
-    tag_chars=()
-    raw_previews=()
-    while IFS= read -r tag_header; do
-        tag_char=$(printf '%s' "$tag_header" | sed 's/^--- Tag #\(.\).*/\1/')
-        tag_chars+=("$tag_char")
+        # Extract tag char (e.g., ∆) from "--- Tag #∆ (evaluate and enrich) at line 5 ---"
+        tag_char=$(printf '%s' "$desc_line" | sed 's/^--- Tag #\(.\).*/\1/')
 
-        content_line=$(printf '%s\n' "$description" | awk -v hdr="$tag_header" '
-            found && /^[^ \t]/ { exit }
-            found && NF { print; exit }
-            $0 == hdr { found=1 }
-        ')
-        preview=$(printf '%s' "$content_line" | sed 's/^[[:space:]]*-*[[:space:]]*#[^ ]* //')
+        # Get the next non-empty line (the actual content)
+        content_line=$(printf '%s\n' "$description" | sed -n "$((line_idx + 1)),\$p" | while IFS= read -r cl; do
+            if [[ -n "$cl" ]]; then
+                printf '%s' "$cl"
+                break
+            fi
+        done)
+
+        # Strip leading whitespace, bullet markers, and tag prefix
+        preview=$(printf '%s' "$content_line" | sed 's/^[[:space:]]*-*[[:space:]]*#[^[:space:]]* //')
+
+        # Truncate
         if [[ ${#preview} -gt 60 ]]; then
             preview="${preview:0:57}..."
         fi
-        raw_previews+=("$preview")
-    done < <(printf '%s\n' "$description" | grep '^--- Tag #')
 
-    # Build summarization prompt
-    summary_input=""
-    for idx in "${!tag_chars[@]}"; do
-        summary_input+="Tag #${tag_chars[$idx]}: ${raw_previews[$idx]}"$'\n'
-    done
-
-    # Call Claude haiku for a fast cheap summary
-    summary_result=$(printf '%s' "$summary_input" | claude \
-        --model haiku \
-        -p "For each line below, write a 3-8 word imperative command summarizing the task. Output ONLY one line per input, in the exact format: #X summary (where X is the tag character from the input). No extra text.
-
-${summary_input}" \
-        --max-budget-usd 0.01 2>/dev/null) || summary_result=""
-
-    # Parse summaries or fall back to raw previews
-    # Each line: #X summary\tvault/relative/path (tab-separated for SwiftBar)
-    active_desc=""
-    for idx in "${!tag_chars[@]}"; do
-        tc="${tag_chars[$idx]}"
-        # Try to find this tag's summary in Claude's output
-        matched_line=$(printf '%s\n' "$summary_result" | grep "^#${tc} " | head -1)
-        if [[ -n "$matched_line" ]]; then
-            active_desc+="${matched_line}"$'\t'"${vault_rel}"$'\n'
-        else
-            active_desc+="#${tc} ${raw_previews[$idx]}"$'\t'"${vault_rel}"$'\n'
+        # Fallback if preview is still empty
+        if [[ -z "$preview" ]]; then
+            preview="$file_basename"
         fi
-    done
+
+        active_desc+="#${tag_char} ${preview}"$'\t'"${vault_rel}"$'\n'
+    done <<< "$description"
 
     # Trim trailing newline
     active_desc="${active_desc%$'\n'}"
