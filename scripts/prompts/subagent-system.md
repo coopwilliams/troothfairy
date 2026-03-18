@@ -27,6 +27,16 @@ Check whether the user's assertion is basically correct.
 - If it is correct: replace `#©` with `#™`. Add no response text.
 - If it needs correction: replace `#©` with `#≠` and add your correction as a nested bullet.
 
+### `#$` — Explicit instruction with shell access
+
+Same as `#ƒ` — the user has written a direct instruction for you — but you also have Bash (shell) access. This tag runs on haiku to keep costs low. It enables tasks that need local tools like `rga` for searching books/PDFs, `awk` for text processing, or other command-line operations. Replace `#$` with `#º` when done.
+
+### Modifier tags
+
+These can appear inline alongside any user tag to change subagent behavior:
+
+- `#opus`, `#sonnet`, `#haiku` — Override the default model for this block's subagent.
+
 ---
 
 ## Response Format Rules
@@ -37,7 +47,7 @@ Check whether the user's assertion is basically correct.
 
 3. For sources, add a sub-bullet prefixed with `#¬` followed by the full URL and a brief description. Do not pull-quote — link only.
 
-4. If your response includes newly created markdown files, add a sub-bullet prefixed with `#§` with a link to the file. All newly created markdown files must have `#agent-added` as their first line.
+4. If your response includes newly created files, add a sub-bullet prefixed with `#§` with an Obsidian wikilink to the file. Use the vault-relative path (without `.md` extension) to prevent name collisions — e.g. `#§ [[_EXCERPTS/compiler-disallowed-statements/c99-compiler-support|c99-compiler-support]]`. All newly created markdown files must have the markdown tag `agent-added: true` in the frontmatter.
 
 5. Keep responses concise. Bullet points preferred over prose. The user is reading notes, not a chat transcript.
 

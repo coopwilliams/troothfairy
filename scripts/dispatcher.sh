@@ -27,6 +27,7 @@ TAG_F='#ƒ'   # alt-f  — explicit instruction
 TAG_D='#∆'   # alt-j  — evaluate and enrich
 TAG_S='#∑'   # alt-w  — evaluate with full file context
 TAG_C='#©'   # alt-g  — validate/check
+TAG_BASH='#$' # alt-4  — explicit instruction with shell access
 
 # ---------------------------------------------------------------------------
 # Vault-scoped tk: run tk commands from inside the vault so tickets
@@ -109,7 +110,7 @@ extract_block() {
 GREP_RESULTS=$(
     grep -rn --include='*.md' -F \
         --exclude-dir='.tickets' \
-        -e "$TAG_F" -e "$TAG_D" -e "$TAG_S" -e "$TAG_C" \
+        -e "$TAG_F" -e "$TAG_D" -e "$TAG_S" -e "$TAG_C" -e "$TAG_BASH" \
         "$VAULT_DIR" 2>/dev/null \
     | sort -t: -k1,1 -k2,2n \
     || true
@@ -159,7 +160,9 @@ while IFS= read -r result_line; do
 
     # Determine tag type label
     tag_type="unknown"
-    if [[ "$line_content" == *"$TAG_F"* ]]; then
+    if [[ "$line_content" == *'#$'* ]]; then
+        tag_type='$ (instruction with shell access)'
+    elif [[ "$line_content" == *"$TAG_F"* ]]; then
         tag_type="ƒ (explicit instruction)"
     elif [[ "$line_content" == *"$TAG_D"* ]]; then
         tag_type="∆ (evaluate and enrich)"

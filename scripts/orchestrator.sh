@@ -25,6 +25,7 @@ VAULT_DIR="${1:-${REPO_ROOT}/orb-vault}"
 SYSTEM_PROMPT_FILE="${SCRIPT_DIR}/prompts/subagent-system.md"
 BLACKLIST_FILE="${REPO_ROOT}/sourcing/SOURCING-BLACKLIST.md"
 WHITELIST_FILE="${REPO_ROOT}/sourcing/SOURCING-WHITELIST.md"
+EXCERPT_SKILL_FILE="${REPO_ROOT}/.claude/skills/excerpt-text/SKILL.md"
 
 # ---------------------------------------------------------------------------
 # Status directory for SwiftBar / external monitoring
@@ -208,16 +209,17 @@ while IFS= read -r ticket_id; do
     subagent_model="sonnet"
     subagent_tools="Edit,Read,Write,WebSearch,WebFetch"
 
-    if printf '%s\n' "$description" | grep -qiF '#opus'; then
-        subagent_model="opus"
-    elif printf '%s\n' "$description" | grep -qiF '#haiku'; then
+    # #$ grants Bash and forces haiku (cheap shell tasks)
+    if printf '%s\n' "$description" | grep -qF '#$'; then
         subagent_model="haiku"
-    elif printf '%s\n' "$description" | grep -qiF '#sonnet'; then
-        subagent_model="sonnet"
+        subagent_tools="Edit,Read,Write,Bash,WebSearch,WebFetch"
     fi
 
-    if printf '%s\n' "$description" | grep -qiF '#bash'; then
-        subagent_tools="Edit,Read,Write,Bash,WebSearch,WebFetch"
+    # Explicit model overrides (take precedence over #$ default)
+    if printf '%s\n' "$description" | grep -qiF '#opus'; then
+        subagent_model="opus"
+    elif printf '%s\n' "$description" | grep -qiF '#sonnet'; then
+        subagent_model="sonnet"
     fi
 
     # ---- Build the user prompt ----
@@ -260,9 +262,14 @@ ${DIRS_PROMPT_SECTION}"
     prompt_file="${WORK_DIR}/${ticket_id}.prompt"
     printf '%s' "$user_prompt" > "$prompt_file"
 
-    # Write system prompt to temp file
+    # Write system prompt to temp file, appending skill instructions for #$ tags
     system_prompt_file="${WORK_DIR}/${ticket_id}.system"
     printf '%s' "$SYSTEM_PROMPT" > "$system_prompt_file"
+    if printf '%s\n' "$description" | grep -qF '#$'; then
+        if [[ -f "$EXCERPT_SKILL_FILE" ]]; then
+            printf '\n\n---\n\n## Skill: excerpt-text\n\n%s' "$(cat "$EXCERPT_SKILL_FILE")" >> "$system_prompt_file"
+        fi
+    fi
 
     # Status file: subagent writes "0" on success, "1 <message>" on failure
     status_file="${WORK_DIR}/${ticket_id}.status"

@@ -52,6 +52,7 @@ install_if_missing() {
 
 install_if_missing fswatch fswatch formula
 install_if_missing tk ticket formula
+install_if_missing pandoc poppler ffmpeg rga
 
 # ticket requires a tap
 if ! command -v tk >/dev/null 2>&1; then

@@ -14,3 +14,6 @@ status_dir: /tmp/troothfairy-status
 # Relative paths are resolved from the repo root.
 dirs:
   - ./sourcing/tags read
+  - /Users/cooperwilliams/Documents/02-books read
+  - /Users/cooperwilliams/Documents/03-papers-essays read
+  - ./_EXCERPTS write
