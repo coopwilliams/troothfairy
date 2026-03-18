@@ -71,7 +71,7 @@ function flush(    out, pg) {
 END { flush() }
 ' /tmp/my_session_id
 	```
-5. Read through the chunked files one by one in sequence. Each chunk has YAML frontmatter with `filepath`, `search_string`, `context_lines`, and (for PDFs) `page_start`/`page_end`. The body text has page prefixes stripped for clean copy-paste. If a file matches the user's filtering criteria then copy it into the EXCERPT_DIR and move on to the next file.
+5. Read through the chunked files one by one in sequence. Each chunk has YAML frontmatter with `filepath`, `title` in double quotes, `search_string` in double quotes, `context_lines`, and (for PDFs) `page_start`/`page_end`. The body text has page prefixes stripped for clean copy-paste. If a file matches the user's filtering criteria then copy it into the EXCERPT_DIR and move on to the next file.
 6. When no more files are left to read, the job is done.
 
 # tips for debugging
