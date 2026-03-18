@@ -44,7 +44,7 @@ function flush(    out, pg) {
     if (buf != "") {
         n++
         out = "/tmp/my_session_id_splits/" sprintf("%04d", n)
-        printf "---\nfilepath: \"%s\"\nsearch_string: \"%s\"\ncontext_lines: %s\n", fname, search_string, context_lines > out
+        printf "---\nagent-added: true\nfilepath: \"%s\"\nsearch_string: \"%s\"\ncontext_lines: %s\n", fname, search_string, context_lines > out
         if (page_start > 0) {
             printf "page_start: %d\npage_end: %d\n", page_start, page_end > out
         }
@@ -71,8 +71,15 @@ function flush(    out, pg) {
 END { flush() }
 ' /tmp/my_session_id
 	```
-5. Read through the chunked files one by one in sequence. Each chunk has YAML frontmatter with `filepath`, `title` in double quotes, `search_string` in double quotes, `context_lines`, and (for PDFs) `page_start`/`page_end`. The body text has page prefixes stripped for clean copy-paste. If a file matches the user's filtering criteria then copy it into the EXCERPT_DIR and move on to the next file.
-6. When no more files are left to read, the job is done.
+5. Process chunks sequentially from `/tmp/my_session_id_splits/`. Start with chunk 0001:
+  - Use the Read tool (NOT bash loops) to read `/tmp/my_session_id_splits/0001`
+  - Examine its frontmatter and body text. Does it match the user's criteria? Only you can judge.
+  - If YES: use Bash to `mv /tmp/my_session_id_splits/0001 /path/to/EXCERPT_DIR/descriptive-name.md`. Do NOT edit the file.
+  - If NO: use Bash to `rm /tmp/my_session_id_splits/0001`
+  - Then repeat: read chunk 0002, decide, move/delete, then chunk 0003, etc.
+  - Excerpt filenames cannot start with a dot or contain any of these characters: `[]#^|`
+  - **CRITICAL:** Read one chunk at a time using the Read tool. Do NOT use bash loops, do NOT batch process, do NOT read all chunks upfront. Do NOT read from EXCERPT_DIR. Do NOT summarize or combine chunks. Do NOT edit or add frontmatter to files — move them verbatim. When done, the splits folder should be empty.
+6. The job is complete when all chunks have been individually processed and the splits folder is empty.
 
 # tips for debugging
 - This search term is useful for getting a small, workable result that actually does have some files with multiple matches: `rga -C 3 --rga-adapters=-zip --heading "become ever|be ever"`
