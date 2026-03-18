@@ -29,7 +29,7 @@ fswatch → watch.sh → dispatcher.sh → orchestrator.sh → claude -p (subage
 - `#∆` (alt-j) — evaluate and enrich → completion: `#º`
 - `#∑` (alt-w) — evaluate with full file context → completion: `#º`
 - `#©` (alt-g) — fact-check → completion: `#™` (correct) or `#≠` (corrected)
-- `#$` (alt-4) — explicit instruction with Bash/shell access, runs on haiku → completion: `#º`
+- `#$` (shift-4) — explicit instruction with Bash/shell access, runs on haiku → completion: `#º`
 
 ### Modifier tags (inline with user tags)
 - `#opus`, `#sonnet`, `#haiku` — override subagent model
@@ -87,16 +87,14 @@ Vault-scoped tickets use `vtk()` wrapper: `TICKETS_DIR="${VAULT_DIR}/.tickets" t
 - File links in agent responses use Obsidian full-path wikilinks: `[[_EXCERPTS/topic/filename|filename]]`
 
 ## Git workflow
-
+- Test before committing to make sure nothing breaks.
 - **Atomic commits**: Each commit should be a single logical change. Don't bundle unrelated changes. If a session touches the dispatcher, the skill, and the system prompt for different reasons, those are separate commits.
-- Commit after completing each feature or fix — don't accumulate uncommitted work.
 
 ## Known issues / gotchas
 
 - **macOS awk**: No capture groups in `match()`. Use `match(line, /pattern/)` then `substr(line, RSTART + RLENGTH)`.
 - **macOS bash 3.2**: No associative arrays. Dispatcher uses temp files + sha hashing for grouping.
 - **rga `--heading` flag**: Required for the awk splitter to work. Without it, filepaths are prefixed on every line and `--` separators don't appear alone.
-- **rga `--headers`**: Does not exist. Use `--heading`.
-- **YAML frontmatter**: Values containing colons must be double-quoted or they break parsing.
+- **YAML frontmatter**: strings must be double-quoted or they can break parsing.
 - **Tilde in bash**: `~` does not expand inside double quotes. Use `$HOME`.
 - **Subagents don't load skills**: Skills from `.claude/skills/` are not available in `-p` mode subagents. The orchestrator must inject skill content into the system prompt explicitly.
