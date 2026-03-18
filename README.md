@@ -23,6 +23,7 @@ Write notes in your Obsidian vault using bullet points. Add a tag at the start o
 | `#∆` | alt-j | Evaluate your assertion, add context and sources |
 | `#∑` | alt-w | Same as `#∆` but reads the entire file for context |
 | `#©` | alt-g | Fact-check: pass silently or correct |
+| `#$` | shift-4 | Explicit instruction with shell/Bash access (runs on haiku) |
 
 Save the file. Troothfairy detects the change, processes your tags, and edits the file in place.
 
@@ -46,7 +47,7 @@ After processing, user tags are replaced with completion tags:
 
 | Tag | Meaning |
 |-----|---------|
-| `#º` | Processed (for `#ƒ`, `#∆`, `#∑`) |
+| `#º` | Processed (for `#ƒ`, `#∆`, `#∑`, `#$`) |
 | `#™` | Fact-checked and correct (for `#©`) |
 | `#≠` | Fact-checked with correction (for `#©`) |
 | `#¡` | Agent failed or gave a degraded response (appears after the completion tag) |
