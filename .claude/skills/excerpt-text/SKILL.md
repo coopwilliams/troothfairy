@@ -19,16 +19,16 @@ The steps:
 	- ```bash
 	rga -C 15 --heading --rga-adapters=-zip "my_search_term" SEARCH_DIR > /tmp/my_session_id
 	```
-3. Check that the temp file is under the reading budget. If not, repeat step 2 with a smaller `-C` value until it is.
+3. Check that the temp file is under the reading budget. If not, repeat step 2 with a smaller `-C` value until it is. The chunk count formula accounts for both `--` separators and filepath-change splits.
 	- ```bash
-	  FILE=/tmp/my_session_id; OUT_PER_SECTION=150; \
-			  SECTIONS=$(( $(grep -c '^--$' "$FILE") + 1 )); \
-			  IN_TOK=$(( $(wc -c < "$FILE") / 4 )); \
-			  OUT_TOK=$(( SECTIONS * OUT_PER_SECTION )); \
+	  FILE=/tmp/my_session_id; \
+			  CHUNKS=$(( $(grep -c '^--$' "$FILE") + $(grep -c '^/' "$FILE") )); \
+			  IN_TOK=$(( $(wc -c < "$FILE") / 4 + CHUNKS * 70 )); \
+			  OUT_TOK=$(( CHUNKS * 10 )); \
 			  awk "BEGIN { \
-			    in_cost  = $IN_TOK  / 1000000 * 0.80; \
-			    out_cost = $OUT_TOK / 1000000 * 4.00; \
-			    printf \"Sections : $SECTIONS\nInput tok : $IN_TOK  → %.6f USD\nOutput tok: $OUT_TOK  → %.6f USD\nTotal est : %.6f USD\n\", \
+			    in_cost  = $IN_TOK  / 1000000 * 0.25; \
+			    out_cost = $OUT_TOK / 1000000 * 1.25; \
+			    printf \"Chunks   : $CHUNKS\nInput tok: $IN_TOK  → %.6f USD (haiku)\nOutput tok: $OUT_TOK  → %.6f USD (haiku)\nTotal est: %.6f USD\n\", \
 			      in_cost, out_cost, in_cost + out_cost; }"
 	  ```
 4. Split the temp file into a folder of chunks. With `--heading`, the format is:
@@ -71,15 +71,57 @@ function flush(    out, pg) {
 END { flush() }
 ' /tmp/my_session_id
 	```
-5. Process chunks sequentially from `/tmp/my_session_id_splits/`. Start with chunk 0001:
-  - Use the Read tool (NOT bash loops) to read `/tmp/my_session_id_splits/0001`
-  - Examine its frontmatter and body text. Does it match the user's criteria? Only you can judge.
-  - If YES: use Bash to `mv /tmp/my_session_id_splits/0001 /path/to/EXCERPT_DIR/descriptive-name.md`. Do NOT edit the file.
-  - If NO: use Bash to `rm /tmp/my_session_id_splits/0001`
-  - Then repeat: read chunk 0002, decide, move/delete, then chunk 0003, etc.
-  - Excerpt filenames cannot start with a dot or contain any of these characters: `[]#^|`
-  - **CRITICAL:** Read one chunk at a time using the Read tool. Do NOT use bash loops, do NOT batch process, do NOT read all chunks upfront. Do NOT read from EXCERPT_DIR. Do NOT summarize or combine chunks. Do NOT edit or add frontmatter to files — move them verbatim. When done, the splits folder should be empty.
-6. The job is complete when all chunks have been individually processed and the splits folder is empty.
+5. Evaluate chunks in parallel using haiku subagents. You do NOT read any chunks yourself. Instead, run a bash script that spawns `claude --model haiku -p` calls in batches of 10. Each haiku call receives one chunk and the user's inclusion criteria, and responds with either `yes - descriptive-kebab-filename` or `no`.
+	- Set `CRITERIA` to a concise version of the user's inclusion criteria.
+	- Set `SID` to your session id, `SPLITS` to `/tmp/${SID}_splits`, `RESULTS` to `/tmp/${SID}_results`.
+	- ```bash
+	  SPLITS="/tmp/my_session_id_splits"
+	  RESULTS="/tmp/my_session_id_results"
+	  CRITERIA="my inclusion criteria"
+	  BATCH=10
+
+	  mkdir -p "$RESULTS"
+	  files=("$SPLITS"/*)
+	  total=${#files[@]}
+	  for (( i=0; i<total; i+=BATCH )); do
+	    pids=()
+	    for (( j=i; j<i+BATCH && j<total; j++ )); do
+	      chunk="${files[$j]}"
+	      name=$(basename "$chunk")
+	      (
+	        v=$(claude --model haiku -p "Does this text match the criteria? Criteria: ${CRITERIA}
+
+	  $(cat "$chunk")
+
+	  If YES: respond with exactly: yes - descriptive-kebab-case-filename
+	  If NO: respond with exactly: no
+	  Nothing else." 2>/dev/null | head -1 | tr -d '\r')
+	        printf '%s' "$v" > "$RESULTS/$name"
+	      ) &
+	      pids+=($!)
+	    done
+	    for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+	  done
+	  ```
+	- Anything other than a line starting with `yes - ` is treated as NO. This is conservative — it may miss a chunk on haiku failure, but never moves irrelevant content.
+6. Collect results: move YES chunks to EXCERPT_DIR with the haiku-suggested filename, delete NO chunks.
+	- ```bash
+	  for chunk in "$SPLITS"/*; do
+	    name=$(basename "$chunk")
+	    result=$(cat "$RESULTS/$name" 2>/dev/null)
+	    if printf '%s' "$result" | grep -q '^yes - '; then
+	      slug=$(printf '%s' "$result" | sed 's/^yes - //')
+	      mv "$chunk" "$EXCERPT_DIR/${slug}.md"
+	    else
+	      rm "$chunk"
+	    fi
+	  done
+	  rm -rf "$RESULTS"
+	  ```
+	- Excerpt filenames cannot start with a dot or contain any of these characters: `[]#^|`
+	- Do NOT edit chunk files — move them verbatim.
+	- Verify the splits folder is empty when done.
+7. The job is complete when the splits folder is empty. Report which files were saved to EXCERPT_DIR.
 
 # tips for debugging
 - This search term is useful for getting a small, workable result that actually does have some files with multiple matches: `rga -C 3 --rga-adapters=-zip --heading "become ever|be ever"`
