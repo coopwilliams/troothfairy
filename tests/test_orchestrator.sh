@@ -311,8 +311,9 @@ assert_contains "system prompt contains #¡ failure rule" "#¡" "$CLAUDE_ALL"
 
 # 12. --allowedTools flag passed to claude (without Bash by default)
 assert_contains "claude called with --allowedTools" "--allowedTools" "$CLAUDE_ALL"
-assert_contains "default tools include Edit" "Edit" "$CLAUDE_ALL"
-assert_not_contains "default tools exclude Bash" "Bash" "$CLAUDE_ALL"
+TOOLS_LINE=$(printf '%s\n' "$CLAUDE_ALL" | grep -- '--allowedTools' | head -1)
+assert_contains "default tools include Edit" "Edit" "$TOOLS_LINE"
+assert_not_contains "default tools exclude Bash" "Bash" "$TOOLS_LINE"
 
 # 13. Default model is sonnet
 assert_contains "default model is sonnet" "--model sonnet" "$CLAUDE_ALL"
@@ -426,8 +427,8 @@ assert_contains "output mentions no tickets" "no open troothfairy tickets" "$ORC
 echo ""
 
 # ---------------------------------------------------------------------------
-# ── TEST SUITE 4: Modifier overrides (#bash, #opus) ─────────────────────────
-# When tag blocks contain #bash or #opus, the subagent should use those.
+# ── TEST SUITE 4: Modifier overrides (#$, #opus) ─────────────────────────
+# When tag blocks contain #$ or #opus, the subagent should use those.
 # ---------------------------------------------------------------------------
 echo "=== Suite 4: Modifier overrides ==="
 
@@ -457,12 +458,12 @@ esac
 TKSTUB4
 chmod +x "${FAKE_BIN}/tk"
 
-# Modify ticket A to include #bash and #opus modifiers
-cat > "${TICKET_DATA_DIR}/${TICKET_A}" << EOF
+# Modify ticket A to include #$ (shell access) and #opus modifiers
+cat > "${TICKET_DATA_DIR}/${TICKET_A}" << 'EOF'
 Troothfairy: file_a.md
 
---- Tag #ƒ (explicit instruction) at line 1 ---
-- #ƒ Run this script and check output #bash #opus
+--- Tag #$ (instruction with shell access) at line 1 ---
+- #$ Run this script and check output #opus
 
 EOF
 
@@ -481,8 +482,9 @@ fi
 # 22. #opus modifier sets model to opus
 assert_contains "opus modifier sets --model opus" "--model opus" "$CLAUDE_MOD"
 
-# 23. #bash modifier adds Bash to allowedTools
-assert_contains "bash modifier adds Bash tool" "Bash" "$CLAUDE_MOD"
+# 23. #$ tag adds Bash to allowedTools
+TOOLS_MOD_LINE=$(printf '%s\n' "$CLAUDE_MOD" | grep -- '--allowedTools' | head -1)
+assert_contains "#\$ tag adds Bash tool" "Bash" "$TOOLS_MOD_LINE"
 
 echo ""
 

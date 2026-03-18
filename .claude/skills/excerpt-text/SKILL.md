@@ -44,7 +44,7 @@ function flush(    out, pg) {
     if (buf != "") {
         n++
         out = "/tmp/my_session_id_splits/" sprintf("%04d", n)
-        printf "---\nfilepath: %s\nsearch_string: %s\ncontext_lines: %s\n", fname, search_string, context_lines > out
+        printf "---\nfilepath: \"%s\"\nsearch_string: \"%s\"\ncontext_lines: %s\n", fname, search_string, context_lines > out
         if (page_start > 0) {
             printf "page_start: %d\npage_end: %d\n", page_start, page_end > out
         }
