@@ -77,6 +77,8 @@ tests/run_tests.sh        # discovers and runs all test_*.sh files
 
 Vault-scoped tickets use `vtk()` wrapper: `TICKETS_DIR="${VAULT_DIR}/.tickets" tk "$@"`
 
+Note: `tk close` takes only one ticket ID at a time. Close multiple with separate calls: `tk close id1 && tk close id2 && tk close id3`
+
 ## Key conventions
 
 - The vault (`orb-vault/`) is gitignored. Never commit vault contents.
