@@ -110,7 +110,7 @@ END { flush() }
 	  ```
 	- Anything other than a line starting with `yes - ` is treated as NO. This is conservative — it may miss a chunk on API failure, but never moves irrelevant content.
 	- If you get an auth error, check that `.env` contains `ANTHROPIC_API_KEY=sk-ant-...` and that the account has credits.
-6. Collect results: move YES chunks to EXCERPT_DIR with the haiku-suggested filename, delete NO chunks.
+6. Collect results: move YES chunks to the vault's EXCERPT_DIR with the haiku-suggested filename, delete NO chunks.
 	- ```bash
 	  for chunk in "$SPLITS"/*; do
 	    name=$(basename "$chunk")
