@@ -19,15 +19,15 @@ The steps:
 	- ```bash
 	rga -C 15 --heading --rga-adapters=-zip "my_search_term" SEARCH_DIR > /tmp/my_session_id
 	```
-3. Check that the temp file is under the reading budget. If not, repeat step 2 with a smaller `-C` value until it is. The chunk count formula accounts for both `--` separators and filepath-change splits.
+3. Check that the temp file is under the reading budget. If not, repeat step 2 with a smaller `-C` value until it is. The chunk count formula accounts for both `--` separators and filepath-change splits. Pricing is Haiku 4.5: $1.00/MTok in, $5.00/MTok out.
 	- ```bash
 	  FILE=/tmp/my_session_id; \
 			  CHUNKS=$(( $(grep -c '^--$' "$FILE") + $(grep -c '^/' "$FILE") )); \
 			  IN_TOK=$(( $(wc -c < "$FILE") / 4 + CHUNKS * 70 )); \
 			  OUT_TOK=$(( CHUNKS * 10 )); \
 			  awk "BEGIN { \
-			    in_cost  = $IN_TOK  / 1000000 * 0.25; \
-			    out_cost = $OUT_TOK / 1000000 * 1.25; \
+			    in_cost  = $IN_TOK  / 1000000 * 1.00; \
+			    out_cost = $OUT_TOK / 1000000 * 5.00; \
 			    printf \"Chunks   : $CHUNKS\nInput tok: $IN_TOK  → %.6f USD (haiku)\nOutput tok: $OUT_TOK  → %.6f USD (haiku)\nTotal est: %.6f USD\n\", \
 			      in_cost, out_cost, in_cost + out_cost; }"
 	  ```
@@ -71,10 +71,12 @@ function flush(    out, pg) {
 END { flush() }
 ' /tmp/my_session_id
 	```
-5. Evaluate chunks in parallel using haiku subagents. You do NOT read any chunks yourself. Instead, run a bash script that spawns `claude --model haiku -p` calls in batches of 10. Each haiku call receives one chunk and the user's inclusion criteria, and responds with either `yes - descriptive-kebab-filename` or `no`.
+5. Evaluate chunks in parallel using the Anthropic API. You do NOT read any chunks yourself. Instead, run a bash script that sends curl requests to the Messages API in parallel. Each call sends one chunk and the inclusion criteria to Haiku, which responds with `yes - descriptive-kebab-filename` or `no`.
+	- Source the `.env` file in the project root to get `ANTHROPIC_API_KEY`.
 	- Set `CRITERIA` to a concise version of the user's inclusion criteria.
 	- Set `SID` to your session id, `SPLITS` to `/tmp/${SID}_splits`, `RESULTS` to `/tmp/${SID}_results`.
 	- ```bash
+	  source /path/to/orb/.env
 	  SPLITS="/tmp/my_session_id_splits"
 	  RESULTS="/tmp/my_session_id_results"
 	  CRITERIA="my inclusion criteria"
@@ -89,13 +91,16 @@ END { flush() }
 	      chunk="${files[$j]}"
 	      name=$(basename "$chunk")
 	      (
-	        v=$(claude --model haiku -p "Does this text match the criteria? Criteria: ${CRITERIA}
-
-	  $(cat "$chunk")
-
-	  If YES: respond with exactly: yes - descriptive-kebab-case-filename
-	  If NO: respond with exactly: no
-	  Nothing else." 2>/dev/null | head -1 | tr -d '\r')
+	        body=$(jq -n --arg criteria "$CRITERIA" --arg chunk "$(cat "$chunk")" '{
+	          model: "claude-haiku-4-5",
+	          max_tokens: 100,
+	          messages: [{role: "user", content: ("Does this text match the criteria? Criteria: " + $criteria + "\n\n" + $chunk + "\n\nIf YES: respond with exactly: yes - descriptive-kebab-case-filename\nIf NO: respond with exactly: no\nNothing else.")}]
+	        }')
+	        v=$(curl -s https://api.anthropic.com/v1/messages \
+	          -H "Content-Type: application/json" \
+	          -H "x-api-key: $ANTHROPIC_API_KEY" \
+	          -H "anthropic-version: 2023-06-01" \
+	          -d "$body" | jq -r '.content[0].text' | head -1 | tr -d '\r')
 	        printf '%s' "$v" > "$RESULTS/$name"
 	      ) &
 	      pids+=($!)
@@ -103,7 +108,8 @@ END { flush() }
 	    for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
 	  done
 	  ```
-	- Anything other than a line starting with `yes - ` is treated as NO. This is conservative — it may miss a chunk on haiku failure, but never moves irrelevant content.
+	- Anything other than a line starting with `yes - ` is treated as NO. This is conservative — it may miss a chunk on API failure, but never moves irrelevant content.
+	- If you get an auth error, check that `.env` contains `ANTHROPIC_API_KEY=sk-ant-...` and that the account has credits.
 6. Collect results: move YES chunks to EXCERPT_DIR with the haiku-suggested filename, delete NO chunks.
 	- ```bash
 	  for chunk in "$SPLITS"/*; do
