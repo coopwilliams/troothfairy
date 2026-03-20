@@ -2,10 +2,9 @@
 # dispatcher.sh — Troothfairy vault tag dispatcher
 #
 # Triggered by fswatch when .md files change in the vault.
-# Scans for open user tags, groups them by file, and creates
-# one `tk` ticket per file via the tk CLI.
+# Scans for open user tags and creates one `tk` ticket per tagged block.
 #
-# Requires: bash 3.2+ (compatible with macOS system bash), grep, awk, sort
+# Requires: bash 3.2+ (compatible with macOS system bash), grep, awk, sort, jq
 #
 # Usage: dispatcher.sh [vault_dir]
 #   vault_dir  Path to the Obsidian vault (default: ./orb-vault)
@@ -28,6 +27,8 @@ TAG_D='#∆'   # alt-j  — evaluate and enrich
 TAG_S='#∑'   # alt-w  — evaluate with full file context
 TAG_C='#©'   # alt-g  — validate/check
 TAG_BASH='#$' # alt-4  — explicit instruction with shell access
+
+SCHEMA_VERSION=1
 
 # ---------------------------------------------------------------------------
 # Vault-scoped tk: run tk commands from inside the vault so tickets
@@ -132,89 +133,112 @@ if [[ -z "$GREP_RESULTS" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Group tags by file using temp files.
-#
-# Strategy (bash 3.2-compatible, no associative arrays):
-#   - A manifest file lists each unique file path that has tags, one per line.
-#   - For each tagged file, a sidecar temp file accumulates the description.
-#   - Sidecar files are named by MD5/sha hash of the file path to avoid
-#     collisions and filesystem-unfriendly characters.
+# Helpers for block-level job tickets.
 # ---------------------------------------------------------------------------
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"; rm -f "$LOCKFILE"' EXIT
+ticket_count=0
 
-MANIFEST="${WORK_DIR}/manifest"
-touch "$MANIFEST"
+resolve_route() {
+    local tag_char="$1"
+    case "$tag_char" in
+        '$') printf 'local-agent\n' ;;
+        'ƒ'|'∆'|'∑'|'©') printf 'api-search\n' ;;
+        *) printf 'hybrid\n' ;;
+    esac
+}
 
-# Returns a safe filename derived from a string (sha256, first 16 hex chars)
-safe_key() {
-    printf '%s' "$1" | shasum -a 256 | cut -c1-16
+tag_label_for_char() {
+    local tag_char="$1"
+    case "$tag_char" in
+        '$') printf 'instruction with shell access\n' ;;
+        'ƒ') printf 'explicit instruction\n' ;;
+        '∆') printf 'evaluate and enrich\n' ;;
+        '∑') printf 'evaluate with full file context\n' ;;
+        '©') printf 'validate/check\n' ;;
+        *) printf 'unknown\n' ;;
+    esac
+}
+
+needs_full_file_for_tag() {
+    local tag_char="$1"
+    case "$tag_char" in
+        '∑') printf 'true\n' ;;
+        *) printf 'false\n' ;;
+    esac
+}
+
+extract_tag_char() {
+    local line_content="$1"
+    if [[ "$line_content" == *'#$'* ]]; then
+        printf '$\n'
+    elif [[ "$line_content" == *"$TAG_F"* ]]; then
+        printf 'ƒ\n'
+    elif [[ "$line_content" == *"$TAG_D"* ]]; then
+        printf '∆\n'
+    elif [[ "$line_content" == *"$TAG_S"* ]]; then
+        printf '∑\n'
+    elif [[ "$line_content" == *"$TAG_C"* ]]; then
+        printf '©\n'
+    else
+        printf '?\n'
+    fi
 }
 
 while IFS= read -r result_line; do
+    [[ -z "$result_line" ]] && continue
+
     # result_line format:  /path/to/file.md:42:  - #ƒ do something
     file_path="${result_line%%:*}"
     remainder="${result_line#*:}"
     line_num="${remainder%%:*}"
     line_content="${remainder#*:}"
 
-    # Determine tag type label
-    tag_type="unknown"
-    if [[ "$line_content" == *'#$'* ]]; then
-        tag_type='$ (instruction with shell access)'
-    elif [[ "$line_content" == *"$TAG_F"* ]]; then
-        tag_type="ƒ (explicit instruction)"
-    elif [[ "$line_content" == *"$TAG_D"* ]]; then
-        tag_type="∆ (evaluate and enrich)"
-    elif [[ "$line_content" == *"$TAG_S"* ]]; then
-        tag_type="∑ (evaluate with full file context)"
-    elif [[ "$line_content" == *"$TAG_C"* ]]; then
-        tag_type="© (validate/check)"
-    fi
-
-    # Extract the block for this tag
+    tag_char=$(extract_tag_char "$line_content")
+    tag_label=$(tag_label_for_char "$tag_char")
+    route=$(resolve_route "$tag_char")
+    needs_full_file=$(needs_full_file_for_tag "$tag_char")
     block_content=$(extract_block "$file_path" "$line_num")
-
-    # Derive sidecar file path for this source file
-    key=$(safe_key "$file_path")
-    sidecar="${WORK_DIR}/${key}.desc"
-
-    # Register this file in the manifest if not already present
-    if ! grep -qF "$file_path" "$MANIFEST" 2>/dev/null; then
-        printf '%s\n' "$file_path" >> "$MANIFEST"
-        # Write the sidecar header with the source path so we can retrieve it
-        printf '%s\n' "$file_path" > "${WORK_DIR}/${key}.path"
-    fi
-
-    # Append tag entry to this file's description sidecar
-    {
-        printf '%s\n' "--- Tag #${tag_type} at line ${line_num} ---"
-        printf '%s\n' "$block_content"
-        printf '\n'
-    } >> "$sidecar"
-
-done <<< "$GREP_RESULTS"
-
-# ---------------------------------------------------------------------------
-# Create one tk ticket per file
-# ---------------------------------------------------------------------------
-ticket_count=0
-
-while IFS= read -r file_path; do
-    [[ -z "$file_path" ]] && continue
-
-    key=$(safe_key "$file_path")
-    sidecar="${WORK_DIR}/${key}.desc"
+    tagged_line=$(awk "NR==$line_num" "$file_path")
     filename=$(basename "$file_path")
-    description=$(cat "$sidecar")
+    vault_rel="${file_path#"$VAULT_DIR"}"
+    vault_rel="${vault_rel#/}"
+    vault_rel="${vault_rel%.md}"
 
-    vtk create "Troothfairy: ${filename}" \
+    payload_file="${WORK_DIR}/job-${ticket_count}.json"
+    jq -n \
+        --argjson schema_version "$SCHEMA_VERSION" \
+        --arg file_path "$file_path" \
+        --arg vault_rel "$vault_rel" \
+        --arg file_basename "$filename" \
+        --argjson line_number "$line_num" \
+        --arg tag_char "$tag_char" \
+        --arg tag_label "$tag_label" \
+        --arg route "$route" \
+        --argjson needs_full_file "$needs_full_file" \
+        --arg tagged_line "$tagged_line" \
+        --arg block_content "$block_content" \
+        '{
+            schema_version: $schema_version,
+            file_path: $file_path,
+            vault_rel: $vault_rel,
+            file_basename: $file_basename,
+            line_number: $line_number,
+            tag_char: $tag_char,
+            tag_label: $tag_label,
+            route: $route,
+            needs_full_file: $needs_full_file,
+            tagged_line: $tagged_line,
+            block_content: $block_content
+        }' > "$payload_file"
+
+    vtk create "Troothfairy: ${filename}:${line_num}:#${tag_char}" \
         -t task \
-        -d "$description" \
+        -d "$(cat "$payload_file")" \
         --tags troothfairy,auto
 
     ticket_count=$((ticket_count + 1))
-done < "$MANIFEST"
+done <<< "$GREP_RESULTS"
 
 # ---------------------------------------------------------------------------
 # Summary

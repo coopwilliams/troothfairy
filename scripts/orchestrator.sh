@@ -1,19 +1,13 @@
 #!/usr/bin/env bash
-# orchestrator.sh — Troothfairy subagent orchestrator
+# orchestrator.sh — Troothfairy block-job orchestrator
 #
-# Reads open troothfairy tickets created by the dispatcher, spawns one
-# subagent (via the claude CLI) per ticket in parallel, waits for all to
-# finish, then closes successful tickets or adds a failure note to others.
-#
-# Invoked by the dispatcher after it has filed all tickets for a run.
-# Does NOT manage TROOTHLOCK — that is the dispatcher's responsibility.
+# Reads open troothfairy tickets created by the dispatcher, treats each ticket
+# as a single tagged-block job, runs generation work in parallel, then applies
+# deterministic patches per file in a serialized order.
 #
 # Usage: orchestrator.sh [vault_dir]
-#   vault_dir  Path to the Obsidian vault (default: ./orb-vault)
-#              Used to locate full file paths when the ticket only has the
-#              basename.
 #
-# Requires: bash 3.2+, claude CLI, tk CLI
+# Requires: bash 3.2+, claude CLI, tk CLI, jq
 
 set -uo pipefail
 
@@ -26,25 +20,15 @@ SYSTEM_PROMPT_FILE="${SCRIPT_DIR}/prompts/subagent-system.md"
 BLACKLIST_FILE="${REPO_ROOT}/sourcing/SOURCING-BLACKLIST.md"
 WHITELIST_FILE="${REPO_ROOT}/sourcing/SOURCING-WHITELIST.md"
 EXCERPT_SKILL_FILE="${REPO_ROOT}/.claude/skills/excerpt-text/SKILL.md"
+RESULT_SCHEMA_VERSION=1
 
-# ---------------------------------------------------------------------------
-# Status directory for SwiftBar / external monitoring
-# ---------------------------------------------------------------------------
 source "${SCRIPT_DIR}/lib/config.sh" 2>/dev/null || true
 STATUS_DIR="${STATUS_DIR:-$(get_config status_dir /tmp/troothfairy-status 2>/dev/null || echo /tmp/troothfairy-status)}"
 mkdir -p "$STATUS_DIR"
-# Clear any stale active-* files left over from a previous crashed/interrupted run
 rm -f "${STATUS_DIR}"/active-*
 
-# ---------------------------------------------------------------------------
-# Vault-scoped tk: run tk commands from inside the vault so tickets
-# are stored in $VAULT_DIR/.tickets/ (not the repo's .tickets/).
-# ---------------------------------------------------------------------------
 vtk() { TICKETS_DIR="${VAULT_DIR}/.tickets" tk "$@"; }
 
-# ---------------------------------------------------------------------------
-# Sanity checks
-# ---------------------------------------------------------------------------
 if [[ ! -f "$SYSTEM_PROMPT_FILE" ]]; then
     echo "orchestrator: system prompt not found: $SYSTEM_PROMPT_FILE" >&2
     exit 1
@@ -54,9 +38,6 @@ if [[ ! -d "$VAULT_DIR" ]]; then
     exit 1
 fi
 
-# ---------------------------------------------------------------------------
-# Load sourcing lists
-# ---------------------------------------------------------------------------
 BLACKLIST_CONTENT=""
 if [[ -f "$BLACKLIST_FILE" ]]; then
     BLACKLIST_CONTENT=$(cat "$BLACKLIST_FILE")
@@ -67,38 +48,218 @@ if [[ -f "$WHITELIST_FILE" ]]; then
     WHITELIST_CONTENT=$(cat "$WHITELIST_FILE")
 fi
 
-# ---------------------------------------------------------------------------
-# Load configured directories from config.yaml
-# ---------------------------------------------------------------------------
 DIRS_PROMPT_SECTION=""
 while IFS=' ' read -r dir_path dir_access; do
     [[ -z "$dir_path" ]] && continue
     case "$dir_access" in
-        read)            access_label="read-only" ;;
-        write)           access_label="write-only" ;;
-        read-write|rw)   access_label="read-write" ;;
-        *)               access_label="${dir_access:-read-only}" ;;
+        read) access_label="read-only" ;;
+        write) access_label="write-only" ;;
+        read-write|rw) access_label="read-write" ;;
+        *) access_label="${dir_access:-read-only}" ;;
     esac
     DIRS_PROMPT_SECTION+="- ${dir_path} [${access_label}]"$'\n'
 done < <(get_dirs 2>/dev/null || true)
 
-# ---------------------------------------------------------------------------
-# Load and patch the system prompt:
-#   Replace the two runtime-injection placeholders with actual content.
-# ---------------------------------------------------------------------------
 RAW_SYSTEM_PROMPT=$(cat "$SYSTEM_PROMPT_FILE")
-
-# Replace blacklist placeholder
 SYSTEM_PROMPT="${RAW_SYSTEM_PROMPT//'[blacklist will be injected at runtime]'/$BLACKLIST_CONTENT}"
-
-# Replace whitelist placeholder
 SYSTEM_PROMPT="${SYSTEM_PROMPT//'[whitelist will be injected at runtime]'/$WHITELIST_CONTENT}"
 
-# ---------------------------------------------------------------------------
-# Fetch open troothfairy tickets
-# ---------------------------------------------------------------------------
-# tk list outputs one ticket ID per line (or a table; we filter to IDs).
-# We use --status=open and --tags=troothfairy to scope the query.
+RESULT_SCHEMA_TEXT=$(cat <<EOF
+{
+  "schema_version": ${RESULT_SCHEMA_VERSION},
+  "job_id": "ticket-id",
+  "tag": "∆",
+  "outcome": "success | no_op_success | corrected | degraded",
+  "completion_tag": "º",
+  "append_failure_marker": false,
+  "response_lines": [
+    "- #Ω∆ Main response",
+    "\t- #¬ https://example.com — source description"
+  ]
+}
+EOF
+)
+
+extract_json_payload() {
+    awk '
+    /^[[:space:]]*\{/ { capture=1 }
+    capture { print }
+    ' <<< "$1"
+}
+
+route_tools() {
+    case "$1" in
+        local-agent) printf 'Read,Write,Bash\n' ;;
+        api-search) printf 'WebSearch,WebFetch\n' ;;
+        *) printf '\n' ;;
+    esac
+}
+
+route_name() {
+    case "$1" in
+        local-agent) printf 'Local Agent\n' ;;
+        api-search) printf 'API Search\n' ;;
+        hybrid) printf 'Hybrid\n' ;;
+        *) printf 'Unknown\n' ;;
+    esac
+}
+
+default_model_for_tag() {
+    case "$1" in
+        '$') printf 'haiku\n' ;;
+        *) printf 'sonnet\n' ;;
+    esac
+}
+
+apply_model_override() {
+    local model="$1"
+    local block_content="$2"
+    if printf '%s\n' "$block_content" | grep -qiF '#opus'; then
+        printf 'opus\n'
+    elif printf '%s\n' "$block_content" | grep -qiF '#sonnet'; then
+        printf 'sonnet\n'
+    elif printf '%s\n' "$block_content" | grep -qiF '#haiku'; then
+        printf 'haiku\n'
+    else
+        printf '%s\n' "$model"
+    fi
+}
+
+tag_preview() {
+    printf '%s' "$1" | sed 's/^[[:space:]]*-*[[:space:]]*#[^[:space:]]* //'
+}
+
+infer_child_indent() {
+    local tagged_line="$1"
+    local block_content="$2"
+    local base_indent=""
+    local next_line=""
+
+    if [[ "$tagged_line" =~ ^([[:space:]]*) ]]; then
+        base_indent="${BASH_REMATCH[1]}"
+    fi
+
+    next_line=$(printf '%s\n' "$block_content" | awk 'NR > 1 && NF { print; exit }')
+    if [[ -n "$next_line" ]] && [[ "$next_line" =~ ^([[:space:]]*) ]]; then
+        local next_indent="${BASH_REMATCH[1]}"
+        if [[ ${#next_indent} -gt ${#base_indent} ]]; then
+            printf '%s\n' "${next_indent:${#base_indent}}"
+            return 0
+        fi
+    fi
+
+    if [[ "$base_indent" == *$'\t'* ]]; then
+        printf '\t\n'
+    else
+        printf '    \n'
+    fi
+}
+
+find_target_line() {
+    local file_path="$1"
+    local expected_line="$2"
+    local tagged_line="$3"
+
+    local current_line
+    current_line=$(sed -n "${expected_line}p" "$file_path" 2>/dev/null)
+    if [[ "$current_line" == "$tagged_line" ]]; then
+        printf '%s\n' "$expected_line"
+        return 0
+    fi
+
+    awk -v target="$tagged_line" '
+    $0 == target { print NR; exit }
+    ' "$file_path"
+}
+
+apply_result_to_file() {
+    local file_path="$1"
+    local job_file="$2"
+    local result_file="$3"
+    local expected_line="$4"
+
+    local tagged_line tag_char block_content completion_tag append_failure_marker
+    local target_line replaced_line indent_unit child_prefix
+    local tmp_file line_no inserted_count response_count
+
+    tagged_line=$(jq -r '.tagged_line' "$job_file")
+    tag_char=$(jq -r '.tag_char' "$job_file")
+    block_content=$(jq -r '.block_content' "$job_file")
+    completion_tag=$(jq -r '.completion_tag' "$result_file")
+    append_failure_marker=$(jq -r '.append_failure_marker' "$result_file")
+
+    target_line=$(find_target_line "$file_path" "$expected_line" "$tagged_line")
+    if [[ -z "$target_line" ]]; then
+        echo "could not locate tagged line in ${file_path}" >&2
+        return 1
+    fi
+
+    replaced_line=$(printf '%s\n' "$tagged_line" | perl -CSDA -e '
+        use utf8;
+        my ($tag_token, $completion_token) = @ARGV;
+        local $/;
+        my $text = <STDIN>;
+        $text =~ s/\Q$tag_token\E/$completion_token/;
+        print $text;
+    ' "#${tag_char}" "#${completion_tag}")
+    if [[ "$append_failure_marker" == "true" ]]; then
+        replaced_line=$(printf '%s\n' "$replaced_line" | perl -CSDA -e '
+            use utf8;
+            my ($completion_token) = @ARGV;
+            local $/;
+            my $text = <STDIN>;
+            $text =~ s/\Q$completion_token\E/$completion_token #¡/;
+            print $text;
+        ' "#${completion_tag}")
+    fi
+
+    if [[ "$tagged_line" =~ ^([[:space:]]*) ]]; then
+        child_prefix="${BASH_REMATCH[1]}"
+    else
+        child_prefix=""
+    fi
+    indent_unit=$(infer_child_indent "$tagged_line" "$block_content")
+    child_prefix="${child_prefix}${indent_unit}"
+
+    tmp_file=$(mktemp)
+    line_no=0
+    inserted_count=0
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line_no=$((line_no + 1))
+        if [[ "$line_no" -eq "$target_line" ]]; then
+            printf '%s\n' "$replaced_line" >> "$tmp_file"
+            response_count=$(jq -r '.response_lines | length' "$result_file")
+            if [[ "$response_count" -gt 0 ]]; then
+                while IFS= read -r response_line; do
+                    printf '%s%s\n' "$child_prefix" "$response_line" >> "$tmp_file"
+                    inserted_count=$((inserted_count + 1))
+                done < <(jq -r '.response_lines[]' "$result_file")
+            fi
+        else
+            printf '%s\n' "$line" >> "$tmp_file"
+        fi
+    done < "$file_path"
+
+    mv "$tmp_file" "$file_path"
+    printf '%s\n' "$inserted_count"
+}
+
+record_history() {
+    local job_file="$1"
+    local success_marker="$2"
+    local timestamp preview tag_char vault_rel
+
+    timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    preview=$(tag_preview "$(jq -r '.tagged_line' "$job_file")")
+    tag_char=$(jq -r '.tag_char' "$job_file")
+    vault_rel=$(jq -r '.vault_rel' "$job_file")
+    if [[ ${#preview} -gt 60 ]]; then
+        preview="${preview:0:57}..."
+    fi
+    printf '%s %s #%s %s\t%s\n' "$timestamp" "$success_marker" "$tag_char" "$preview" "$vault_rel" >> "${STATUS_DIR}/history.log"
+}
+
 TICKET_IDS=$(vtk list --status=open --tags=troothfairy 2>/dev/null | awk '{print $1}' | grep -E '^[a-zA-Z0-9_-]+$' || true)
 
 if [[ -z "$TICKET_IDS" ]]; then
@@ -109,354 +270,263 @@ fi
 echo "orchestrator: found tickets:"
 echo "$TICKET_IDS"
 
-# ---------------------------------------------------------------------------
-# Work directory for per-subagent temp files
-# ---------------------------------------------------------------------------
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-# ---------------------------------------------------------------------------
-# Helper: find_file_in_vault <basename>
-#
-# Searches the vault directory for a .md file matching the given basename.
-# Prints the first match (full path). Exits non-zero if not found.
-# ---------------------------------------------------------------------------
-find_file_in_vault() {
-    local basename="$1"
-    # Use find to locate the file; restrict to .md files under the vault.
-    local match
-    match=$(find "$VAULT_DIR" -type f -name "$basename" 2>/dev/null | head -1)
-    if [[ -z "$match" ]]; then
-        return 1
-    fi
-    printf '%s\n' "$match"
-}
-
-# ---------------------------------------------------------------------------
-# Helper: parse_tag_type_char <tag_type_label>
-#
-# Extracts the unicode tag character from labels like:
-#   "ƒ (explicit instruction)"
-#   "∆ (evaluate and enrich)"
-#   "∑ (evaluate with full file context)"
-#   "© (validate/check)"
-# Returns the first (unicode) character before the space.
-# ---------------------------------------------------------------------------
-parse_tag_type_char() {
-    # The label starts with the tag character followed by a space
-    printf '%s' "$1" | cut -c1
-}
-
-# ---------------------------------------------------------------------------
-# Process each ticket: build subagent prompts, launch in background
-# ---------------------------------------------------------------------------
 declare -a PIDS=()
 declare -a TICKET_ID_ARRAY=()
+declare -a JOB_FILES=()
+declare -a RESULT_FILES=()
 declare -a STATUS_FILES=()
-declare -a ACTIVE_DESCS=()
+declare -a ACTIVE_FILES=()
+
+overall_exit=0
 
 while IFS= read -r ticket_id; do
     [[ -z "$ticket_id" ]] && continue
 
-    # ---- Get full ticket description via tk show ----
     ticket_body=$(vtk show "$ticket_id" 2>/dev/null) || {
         echo "orchestrator: could not fetch ticket $ticket_id, skipping" >&2
         continue
     }
 
-    # ---- Extract the file basename from the ticket title ----
-    # Title format: "Troothfairy: <filename>"
-    ticket_title=$(printf '%s\n' "$ticket_body" | grep -m1 'Troothfairy:' | sed 's/.*Troothfairy: *//')
-    if [[ -z "$ticket_title" ]]; then
-        # Fallback: try the first line of the body that looks like a title
-        ticket_title=$(printf '%s\n' "$ticket_body" | head -1)
-    fi
-
-    # Strip all leading/trailing whitespace
-    ticket_title="$(printf '%s' "$ticket_title" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    file_basename="${ticket_title}"
-
-    # ---- Locate the full file path in the vault ----
-    file_path=$(find_file_in_vault "$file_basename") || {
-        echo "orchestrator: could not locate file '$file_basename' in vault for ticket $ticket_id, skipping" >&2
-        continue
-    }
-
-    # Vault-relative path (strip vault dir prefix and leading slash), without .md
-    vault_rel="${file_path#"$VAULT_DIR"}"
-    vault_rel="${vault_rel#/}"
-    vault_rel="${vault_rel%.md}"
-
-    # ---- Extract the description block (everything after the title line) ----
-    # tk show format may vary; we capture everything that looks like tag entries.
-    # Tag entry lines begin with "--- Tag #"
-    description=$(printf '%s\n' "$ticket_body" | awk '/^--- Tag #/{found=1} found{print}')
-
-    if [[ -z "$description" ]]; then
-        echo "orchestrator: ticket $ticket_id has no tag entries in description, skipping" >&2
+    job_json=$(extract_json_payload "$ticket_body")
+    if [[ -z "$job_json" ]] || ! printf '%s\n' "$job_json" | jq -e '.schema_version == 1' >/dev/null 2>&1; then
+        vtk add-note "$ticket_id" "Failed: unsupported or missing block-job payload"
+        overall_exit=1
         continue
     fi
 
-    # ---- Determine whether any tag is #∑ (needs full file context) ----
-    needs_full_file=false
-    if printf '%s\n' "$description" | grep -qF '∑'; then
-        needs_full_file=true
+    job_file="${WORK_DIR}/${ticket_id}.job.json"
+    printf '%s\n' "$job_json" > "$job_file"
+
+    file_path=$(jq -r '.file_path' "$job_file")
+    file_basename=$(jq -r '.file_basename' "$job_file")
+    line_number=$(jq -r '.line_number' "$job_file")
+    tag_char=$(jq -r '.tag_char' "$job_file")
+    tag_label=$(jq -r '.tag_label' "$job_file")
+    route=$(jq -r '.route' "$job_file")
+    tagged_line=$(jq -r '.tagged_line' "$job_file")
+    block_content=$(jq -r '.block_content' "$job_file")
+    needs_full_file=$(jq -r '.needs_full_file' "$job_file")
+    vault_rel=$(jq -r '.vault_rel' "$job_file")
+
+    if [[ ! -f "$file_path" ]]; then
+        vtk add-note "$ticket_id" "Failed: source file not found: $file_path"
+        overall_exit=1
+        continue
     fi
 
-    # ---- Detect per-ticket modifiers from tag block content ----
-    # Users can add #bash, #opus, #sonnet, #haiku inline with their tags
-    # to override defaults for that ticket's subagent.
-    subagent_model="sonnet"
-    subagent_tools="Edit,Read,Write,WebSearch,WebFetch"
-
-    # #$ grants Bash and forces haiku (cheap shell tasks)
-    if printf '%s\n' "$description" | grep -qF '#$'; then
-        subagent_model="haiku"
-        subagent_tools="Edit,Read,Write,Bash,WebSearch,WebFetch"
+    if [[ "$route" == "hybrid" ]]; then
+        vtk add-note "$ticket_id" "Failed: hybrid route is intentionally disabled"
+        overall_exit=1
+        continue
     fi
 
-    # Explicit model overrides (take precedence over #$ default)
-    if printf '%s\n' "$description" | grep -qiF '#opus'; then
-        subagent_model="opus"
-    elif printf '%s\n' "$description" | grep -qiF '#sonnet'; then
-        subagent_model="sonnet"
-    fi
+    subagent_model=$(default_model_for_tag "$tag_char")
+    subagent_model=$(apply_model_override "$subagent_model" "$block_content")
+    subagent_tools=$(route_tools "$route")
 
-    # ---- Build the user prompt ----
-    # Start with file identification
-    user_prompt="You are processing the Obsidian vault file: ${file_path}
+    active_desc="#${tag_char} $(tag_preview "$tagged_line")"$'\t'"${vault_rel}"
+    printf '%s\n' "$active_desc" > "${STATUS_DIR}/active-${ticket_id}"
 
+    prompt_file="${WORK_DIR}/${ticket_id}.prompt"
+    system_prompt_file="${WORK_DIR}/${ticket_id}.system"
+    result_file="${WORK_DIR}/${ticket_id}.result.json"
+    status_file="${WORK_DIR}/${ticket_id}.status"
+
+    user_prompt="Process one Obsidian tagged block and return JSON only.
+
+Ticket ID: ${ticket_id}
+Route: ${route} ($(route_name "$route"))
+File: ${file_path}
+Line number: ${line_number}
+Tag: #${tag_char} (${tag_label})
+
+Exact tagged line:
+\`\`\`
+${tagged_line}
+\`\`\`
+
+Block content:
+\`\`\`
+${block_content}
+\`\`\`
 "
 
-    # Optionally include the full file content for #∑ tags
-    if [[ "$needs_full_file" == "true" ]] && [[ -f "$file_path" ]]; then
+    if [[ "$needs_full_file" == "true" ]]; then
         file_content=$(cat "$file_path")
-        user_prompt+="Full file content (for #∑ context):
+        user_prompt+="
+Full file content:
 \`\`\`
 ${file_content}
 \`\`\`
-
 "
     fi
 
-    user_prompt+="Process the following tagged blocks in the file. For each block:
-- Edit the file in place (do NOT output a diff or explanation — make the actual file changes using your tools).
-- Replace the user tag with the correct completion tag per the instructions in your system prompt.
-- Add your response as a bullet nested one indent level under the user's tagged line.
-- Prefix your response with #Ω followed by the original tag character.
-
-Tagged blocks to process:
-
-${description}
-
-Remember: edit the file at ${file_path} directly. Do not output the modified file content as text — use the Edit or Write tools to make changes. Process all blocks listed above."
-
-    if [[ -n "$DIRS_PROMPT_SECTION" ]]; then
+    if [[ "$route" == "local-agent" ]] && [[ -n "$DIRS_PROMPT_SECTION" ]]; then
         user_prompt+="
-
-Configured directories (respect the stated access level — read-only means do not write or delete):
-${DIRS_PROMPT_SECTION}"
+Configured directories:
+${DIRS_PROMPT_SECTION}
+"
     fi
 
-    # ---- Write the user prompt to a temp file (avoids shell quoting issues) ----
-    prompt_file="${WORK_DIR}/${ticket_id}.prompt"
+    user_prompt+="
+Return ONLY valid JSON matching this schema:
+\`\`\`json
+${RESULT_SCHEMA_TEXT}
+\`\`\`
+
+Rules:
+- Do not edit the vault file directly.
+- response_lines must be an array of relative bullet lines. The first inserted line should usually start with - #Ω${tag_char} unless the correct output is a no-op success.
+- For nested children under your first bullet, use leading tabs in response_lines.
+- For #©, use outcome: no_op_success with an empty response_lines array when the assertion is correct.
+- Use append_failure_marker: true for degraded outcomes.
+- Do not wrap the JSON in markdown fences.
+"
+
     printf '%s' "$user_prompt" > "$prompt_file"
-
-    # Write system prompt to temp file, appending skill instructions for #$ tags
-    system_prompt_file="${WORK_DIR}/${ticket_id}.system"
     printf '%s' "$SYSTEM_PROMPT" > "$system_prompt_file"
-    if printf '%s\n' "$description" | grep -qF '#$'; then
-        if [[ -f "$EXCERPT_SKILL_FILE" ]]; then
-            printf '\n\n---\n\n## Skill: excerpt-text\n\n%s' "$(cat "$EXCERPT_SKILL_FILE")" >> "$system_prompt_file"
-        fi
+    if [[ "$tag_char" == '$' ]] && [[ -f "$EXCERPT_SKILL_FILE" ]]; then
+        printf '\n\n---\n\n## Skill: excerpt-text\n\n%s' "$(cat "$EXCERPT_SKILL_FILE")" >> "$system_prompt_file"
     fi
 
-    # Status file: subagent writes "0" on success, "1 <message>" on failure
-    status_file="${WORK_DIR}/${ticket_id}.status"
-
-    # ---- Build per-tag status descriptions from content previews ----
-    # Extract the first line of each tag block, strip the tag prefix,
-    # and truncate to ~60 chars. Format: #X preview\tvault/rel/path
-    active_desc=""
-    line_idx=0
-    while IFS= read -r desc_line; do
-        line_idx=$((line_idx + 1))
-        # Only process tag header lines
-        case "$desc_line" in
-            '--- Tag #'*) ;;
-            *) continue ;;
-        esac
-
-        # Extract tag char (e.g., ∆) from "--- Tag #∆ (evaluate and enrich) at line 5 ---"
-        tag_char=$(printf '%s' "$desc_line" | sed 's/^--- Tag #\(.\).*/\1/')
-
-        # Get the next non-empty line (the actual content)
-        content_line=$(printf '%s\n' "$description" | sed -n "$((line_idx + 1)),\$p" | while IFS= read -r cl; do
-            if [[ -n "$cl" ]]; then
-                printf '%s' "$cl"
-                break
-            fi
-        done)
-
-        # Strip leading whitespace, bullet markers, and tag prefix
-        preview=$(printf '%s' "$content_line" | sed 's/^[[:space:]]*-*[[:space:]]*#[^[:space:]]* //')
-
-        # Truncate
-        if [[ ${#preview} -gt 60 ]]; then
-            preview="${preview:0:57}..."
-        fi
-
-        # Fallback if preview is still empty
-        if [[ -z "$preview" ]]; then
-            preview="$file_basename"
-        fi
-
-        active_desc+="#${tag_char} ${preview}"$'\t'"${vault_rel}"$'\n'
-    done <<< "$description"
-
-    # Trim trailing newline
-    active_desc="${active_desc%$'\n'}"
-
-    # ---- Summarize with Claude haiku (cheap/fast) ----
-    # Feed the raw previews to haiku and ask for 3-8 word imperative summaries.
-    # On success, overwrite active_desc; on failure, keep raw previews.
-    summary_input=""
-    while IFS=$'\t' read -r tag_preview _path; do
-        [[ -z "$tag_preview" ]] && continue
-        summary_input+="${tag_preview}"$'\n'
-    done <<< "$active_desc"
-
-    # ---- Write raw previews to active status file immediately ----
-    printf '%s\n' "$active_desc" > "${STATUS_DIR}/active-${ticket_id}"
-
-    # ---- Launch subagent in background ----
-    # Capture loop variables for the subshell (background fork snapshots these)
     _model="$subagent_model"
     _tools="$subagent_tools"
     (
-        subagent_user_prompt=$(cat "$prompt_file")
-        subagent_system=$(cat "$system_prompt_file")
+        stdout_file="${WORK_DIR}/${ticket_id}.stdout"
+        stderr_file="${WORK_DIR}/${ticket_id}.stderr"
 
         if claude \
             --model "$_model" \
-            -p "$subagent_user_prompt" \
-            --system-prompt "$subagent_system" \
+            -p "$(cat "$prompt_file")" \
+            --system-prompt "$(cat "$system_prompt_file")" \
             --allowedTools "$_tools" \
-            2>"${WORK_DIR}/${ticket_id}.stderr"; then
-            printf '0' > "$status_file"
+            >"$stdout_file" 2>"$stderr_file"; then
+            result_json=$(extract_json_payload "$(cat "$stdout_file")")
+            if [[ -z "$result_json" ]]; then
+                printf '1 invalid_json no-json-object-returned' > "$status_file"
+                exit 0
+            fi
+            if printf '%s\n' "$result_json" | jq -e '
+                .schema_version == 1 and
+                (.job_id | type == "string") and
+                (.tag | type == "string") and
+                (.outcome | type == "string") and
+                (.completion_tag | type == "string") and
+                (.append_failure_marker | type == "boolean") and
+                (.response_lines | type == "array")
+            ' >/dev/null 2>&1; then
+                printf '%s\n' "$result_json" > "$result_file"
+                printf '0' > "$status_file"
+            else
+                printf '1 invalid_json schema-validation-failed' > "$status_file"
+            fi
         else
             exit_code=$?
-            stderr_content=$(cat "${WORK_DIR}/${ticket_id}.stderr" 2>/dev/null | head -5 | tr '\n' ' ')
-            printf '1 %s' "exit_code=${exit_code} ${stderr_content}" > "$status_file"
+            stderr_content=$(head -5 "$stderr_file" 2>/dev/null | tr '\n' ' ')
+            printf '1 claude_failed exit_code=%s %s' "$exit_code" "$stderr_content" > "$status_file"
         fi
     ) &
 
     PIDS+=("$!")
     TICKET_ID_ARRAY+=("$ticket_id")
+    JOB_FILES+=("$job_file")
+    RESULT_FILES+=("$result_file")
     STATUS_FILES+=("$status_file")
-    ACTIVE_DESCS+=("$active_desc")
+    ACTIVE_FILES+=("${STATUS_DIR}/active-${ticket_id}")
 
-    echo "orchestrator: launched subagent for ticket $ticket_id (file: $file_basename, pid: $!)"
-
-    # ---- Improve status display with haiku summary (background, non-blocking) ----
-    # Runs concurrently with the subagent; overwrites active status file on success.
-    if [[ -n "$summary_input" ]]; then
-        _raw_desc="$active_desc"
-        _sid="${STATUS_DIR}/active-${ticket_id}"
-        (
-            summary_result=$(claude \
-                --model haiku \
-                -p "For each line below, rewrite it as a 3-8 word imperative command. Keep the #X prefix exactly as-is. Output ONLY the rewritten lines, one per input line, nothing else.
-
-${summary_input}" \
-                2>/dev/null) || summary_result=""
-
-            # Validate: first line must start with # (reject error messages)
-            if [[ -n "$summary_result" ]] && printf '%s' "$summary_result" | head -1 | grep -q '^#'; then
-                new_desc=""
-                idx=0
-                while IFS= read -r sum_line; do
-                    [[ -z "$sum_line" ]] && continue
-                    raw_line=$(printf '%s\n' "$_raw_desc" | sed -n "$((idx + 1))p")
-                    vpath="${raw_line#*$'\t'}"
-                    new_desc+="${sum_line}"$'\t'"${vpath}"$'\n'
-                    idx=$((idx + 1))
-                done <<< "$summary_result"
-                new_desc="${new_desc%$'\n'}"
-                # Only write if the file still exists (subagent may have already finished and cleaned up)
-                if [[ -n "$new_desc" ]] && [[ -f "$_sid" ]]; then
-                    printf '%s\n' "$new_desc" > "$_sid"
-                fi
-            fi
-        ) &
-    fi
-
+    echo "orchestrator: launched worker for ticket $ticket_id (route: $route, file: $file_basename, pid: $!)"
 done <<< "$TICKET_IDS"
 
-# ---------------------------------------------------------------------------
-# Wait for all subagents and collect results
-# ---------------------------------------------------------------------------
 if [[ ${#PIDS[@]} -eq 0 ]]; then
-    echo "orchestrator: no subagents were launched."
-    exit 0
+    echo "orchestrator: no workers were launched."
+    exit $overall_exit
 fi
 
-echo "orchestrator: waiting for ${#PIDS[@]} subagent(s) to finish..."
+echo "orchestrator: waiting for ${#PIDS[@]} worker(s) to finish..."
 
-overall_exit=0
+declare -a SUCCESS_RECORDS=()
 
 for i in "${!PIDS[@]}"; do
     pid="${PIDS[$i]}"
     ticket_id="${TICKET_ID_ARRAY[$i]}"
+    job_file="${JOB_FILES[$i]}"
+    result_file="${RESULT_FILES[$i]}"
     status_file="${STATUS_FILES[$i]}"
-    active_desc="${ACTIVE_DESCS[$i]}"
-    timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    active_file="${ACTIVE_FILES[$i]}"
 
-    # Wait for this specific subagent process
     wait "$pid" 2>/dev/null || true
+    rm -f "$active_file"
 
-    # Remove active status file
-    rm -f "${STATUS_DIR}/active-${ticket_id}"
-
-    # Read status written by subagent
     status_content=""
     if [[ -f "$status_file" ]]; then
         status_content=$(cat "$status_file")
     fi
 
-    # Write each tag line as its own history entry, converting user tags
-    # (#∆, #ƒ, etc.) to agent tags (#Ω∆, #Ωƒ, etc.)
     if [[ "$status_content" == "0" ]]; then
-        while IFS= read -r tag_line; do
-            [[ -z "$tag_line" ]] && continue
-            history_line=$(printf '%s' "$tag_line" | sed 's/^#\(.\)/#Ω\1/')
-            printf '%s ✓ %s\n' "$timestamp" "$history_line" >> "${STATUS_DIR}/history.log"
-        done <<< "$active_desc"
-        if vtk close "$ticket_id" 2>/dev/null; then
-            echo "orchestrator: ticket $ticket_id closed (success)"
-        else
-            echo "orchestrator: warning — could not close ticket $ticket_id" >&2
-        fi
+        SUCCESS_RECORDS+=("${ticket_id}"$'\t'"${job_file}"$'\t'"${result_file}")
     else
-        # Failure — add a note, log to history, leave ticket open
         error_detail="${status_content#1 }"
-        if [[ -z "$error_detail" ]]; then
-            error_detail="subagent exited with non-zero status"
-        fi
-        note_msg="Failed: ${error_detail}"
-        while IFS= read -r tag_line; do
-            [[ -z "$tag_line" ]] && continue
-            history_line=$(printf '%s' "$tag_line" | sed 's/^#\(.\)/#Ω\1/')
-            printf '%s ✗ %s\n' "$timestamp" "$history_line" >> "${STATUS_DIR}/history.log"
-        done <<< "$active_desc"
-        if vtk add-note "$ticket_id" "$note_msg" 2>/dev/null; then
-            echo "orchestrator: ticket $ticket_id left open with failure note: $note_msg"
-        else
-            echo "orchestrator: warning — could not add note to ticket $ticket_id" >&2
-        fi
+        [[ -n "$error_detail" ]] || error_detail="worker failed before producing a result"
+        vtk add-note "$ticket_id" "Failed: ${error_detail}" 2>/dev/null || true
+        record_history "$job_file" "✗"
         overall_exit=1
     fi
 done
+
+SUCCESS_MANIFEST="${WORK_DIR}/success.manifest"
+: > "$SUCCESS_MANIFEST"
+if [[ ${#SUCCESS_RECORDS[@]} -gt 0 ]]; then
+    printf '%s\n' "${SUCCESS_RECORDS[@]}" > "$SUCCESS_MANIFEST"
+fi
+
+if [[ -s "$SUCCESS_MANIFEST" ]]; then
+    FILE_MANIFEST="${WORK_DIR}/files.manifest"
+    while IFS=$'\t' read -r _ticket_id job_file _result_file; do
+        [[ -n "$job_file" ]] || continue
+        jq -r '.file_path' "$job_file"
+    done < "$SUCCESS_MANIFEST" | sort -u > "$FILE_MANIFEST"
+
+    while IFS= read -r file_path; do
+        [[ -n "$file_path" ]] || continue
+        queue_file="${WORK_DIR}/queue-$(printf '%s' "$file_path" | shasum -a 256 | cut -c1-16).tsv"
+        : > "$queue_file"
+
+        while IFS=$'\t' read -r ticket_id job_file result_file; do
+            [[ -n "$job_file" ]] || continue
+            job_file_path=$(jq -r '.file_path' "$job_file")
+            if [[ "$job_file_path" == "$file_path" ]]; then
+                line_number=$(jq -r '.line_number' "$job_file")
+                printf '%s\t%s\t%s\t%s\n' "$line_number" "$ticket_id" "$job_file" "$result_file" >> "$queue_file"
+            fi
+        done < "$SUCCESS_MANIFEST"
+
+        offset=0
+        sorted_queue="${queue_file}.sorted"
+        sort -n "$queue_file" > "$sorted_queue"
+        while IFS=$'\t' read -r line_number ticket_id job_file result_file; do
+            effective_line=$((line_number + offset))
+            inserted_count=$(apply_result_to_file "$file_path" "$job_file" "$result_file" "$effective_line")
+            apply_exit=$?
+            if [[ "$apply_exit" -eq 0 ]]; then
+                offset=$((offset + inserted_count))
+                if vtk close "$ticket_id" 2>/dev/null; then
+                    record_history "$job_file" "✓"
+                    echo "orchestrator: ticket $ticket_id closed (patched successfully)"
+                else
+                    vtk add-note "$ticket_id" "Failed: patch applied but ticket could not be closed" 2>/dev/null || true
+                    overall_exit=1
+                fi
+            else
+                vtk add-note "$ticket_id" "Failed: deterministic patch application failed" 2>/dev/null || true
+                record_history "$job_file" "✗"
+                overall_exit=1
+            fi
+        done < "$sorted_queue"
+    done < "$FILE_MANIFEST"
+fi
 
 echo "orchestrator: done."
 exit $overall_exit

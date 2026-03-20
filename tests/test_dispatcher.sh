@@ -152,14 +152,14 @@ fi
 
 # ---------------------------------------------------------------------------
 # Test 3: correct number of tk tickets created
-# Expected: 2 tickets (file_a.md and file_b.md — file_c.md has no tags)
+# Expected: 5 tickets (one per tagged block across file_a.md and file_b.md)
 # ---------------------------------------------------------------------------
 if [[ -f "$TK_LOG" ]]; then
     ticket_count=$(grep -c '<<CALL>>' "$TK_LOG" || true)
 else
     ticket_count=0
 fi
-assert_eq "2 tickets created (one per tagged file)" "2" "$ticket_count"
+assert_eq "5 tickets created (one per tagged block)" "5" "$ticket_count"
 
 # ---------------------------------------------------------------------------
 # Test 4: ticket created for file_a.md
@@ -236,7 +236,14 @@ assert_contains "#∑ block contains 'Level 2 sibling child'"  "Level 2 sibling 
 assert_contains "#ƒ plain instruction text captured" "plain instruction line" "$ALL_CALLS"
 
 # ---------------------------------------------------------------------------
-# Test 12: TROOTHLOCK prevents re-entry
+# Test 12: structured payload includes route and line metadata
+# ---------------------------------------------------------------------------
+assert_contains "payload includes api-search route" '"route": "api-search"' "$ALL_CALLS"
+assert_contains "payload includes local line metadata" '"line_number": 1' "$ALL_CALLS"
+assert_contains "payload includes block content field" '"block_content"' "$ALL_CALLS"
+
+# ---------------------------------------------------------------------------
+# Test 13: TROOTHLOCK prevents re-entry
 # Create the lock manually, run again, and confirm no new tickets appear.
 # ---------------------------------------------------------------------------
 touch /tmp/TROOTHLOCK
@@ -246,18 +253,18 @@ rm -f /tmp/TROOTHLOCK   # tidy up (dispatcher won't since it exited early)
 
 assert_eq "second run with lock exits 0" "0" "$SECOND_RUN_EXIT"
 
-# Ticket count must still be 2 (no new calls added)
+# Ticket count must still be 5 (no new calls added)
 if [[ -f "$TK_LOG" ]]; then
     ticket_count_after=$(grep -c '<<CALL>>' "$TK_LOG" || true)
 else
     ticket_count_after=0
 fi
-assert_eq "no additional tickets created when locked" "2" "$ticket_count_after"
+assert_eq "no additional tickets created when locked" "5" "$ticket_count_after"
 
 # ---------------------------------------------------------------------------
-# Test 13: dispatcher summary output contains ticket count
+# Test 14: dispatcher summary output contains ticket count
 # ---------------------------------------------------------------------------
-assert_contains "dispatcher prints ticket count summary" "created 2 ticket" "$DISPATCHER_OUTPUT"
+assert_contains "dispatcher prints ticket count summary" "created 5 ticket" "$DISPATCHER_OUTPUT"
 
 # ---------------------------------------------------------------------------
 # Test 14: tags flag included in tk call
