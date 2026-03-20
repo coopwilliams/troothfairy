@@ -16,21 +16,26 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 VAULT_DIR="${1:-${REPO_ROOT}/orb-vault}"
 
-SYSTEM_PROMPT_FILE="${SCRIPT_DIR}/prompts/subagent-system.md"
+SYSTEM_TEMPLATE_FILE="${SCRIPT_DIR}/prompts/system.tmpl.md"
+JOB_TEMPLATE_FILE="${SCRIPT_DIR}/prompts/job.tmpl.md"
 BLACKLIST_FILE="${REPO_ROOT}/sourcing/SOURCING-BLACKLIST.md"
 WHITELIST_FILE="${REPO_ROOT}/sourcing/SOURCING-WHITELIST.md"
 EXCERPT_SKILL_FILE="${REPO_ROOT}/.claude/skills/excerpt-text/SKILL.md"
-RESULT_SCHEMA_VERSION=1
 
 source "${SCRIPT_DIR}/lib/config.sh" 2>/dev/null || true
+source "${SCRIPT_DIR}/lib/tag_policy.sh" 2>/dev/null || true
 STATUS_DIR="${STATUS_DIR:-$(get_config status_dir /tmp/troothfairy-status 2>/dev/null || echo /tmp/troothfairy-status)}"
 mkdir -p "$STATUS_DIR"
 rm -f "${STATUS_DIR}"/active-*
 
 vtk() { TICKETS_DIR="${VAULT_DIR}/.tickets" tk "$@"; }
 
-if [[ ! -f "$SYSTEM_PROMPT_FILE" ]]; then
-    echo "orchestrator: system prompt not found: $SYSTEM_PROMPT_FILE" >&2
+if [[ ! -f "$SYSTEM_TEMPLATE_FILE" ]]; then
+    echo "orchestrator: system prompt template not found: $SYSTEM_TEMPLATE_FILE" >&2
+    exit 1
+fi
+if [[ ! -f "$JOB_TEMPLATE_FILE" ]]; then
+    echo "orchestrator: job prompt template not found: $JOB_TEMPLATE_FILE" >&2
     exit 1
 fi
 if [[ ! -d "$VAULT_DIR" ]]; then
@@ -60,25 +65,9 @@ while IFS=' ' read -r dir_path dir_access; do
     DIRS_PROMPT_SECTION+="- ${dir_path} [${access_label}]"$'\n'
 done < <(get_dirs "$VAULT_DIR" 2>/dev/null || true)
 
-RAW_SYSTEM_PROMPT=$(cat "$SYSTEM_PROMPT_FILE")
-SYSTEM_PROMPT="${RAW_SYSTEM_PROMPT//'[blacklist will be injected at runtime]'/$BLACKLIST_CONTENT}"
-SYSTEM_PROMPT="${SYSTEM_PROMPT//'[whitelist will be injected at runtime]'/$WHITELIST_CONTENT}"
-
-RESULT_SCHEMA_TEXT=$(cat <<EOF
-{
-  "schema_version": ${RESULT_SCHEMA_VERSION},
-  "job_id": "ticket-id",
-  "tag": "∆",
-  "outcome": "success | no_op_success | corrected | degraded",
-  "completion_tag": "º",
-  "append_failure_marker": false,
-  "response_lines": [
-    "- #Ω∆ Main response",
-    "\t- #¬ https://example.com — source description"
-  ]
-}
-EOF
-)
+RESULT_SCHEMA_FILE="$(resolve_result_schema_file)"
+RESULT_SCHEMA_VERSION=$(jq -r '.schema_version' "$RESULT_SCHEMA_FILE")
+RESULT_SCHEMA_TEXT=$(cat "$RESULT_SCHEMA_FILE")
 
 extract_json_payload() {
     perl -CSDA -0ne '
@@ -91,30 +80,6 @@ extract_json_payload() {
             exit;
         }
     ' <<< "$1"
-}
-
-route_tools() {
-    case "$1" in
-        local-agent) printf 'Read,Write,Bash\n' ;;
-        api-search) printf 'WebSearch,WebFetch\n' ;;
-        *) printf '\n' ;;
-    esac
-}
-
-route_name() {
-    case "$1" in
-        local-agent) printf 'Local Agent\n' ;;
-        api-search) printf 'API Search\n' ;;
-        hybrid) printf 'Hybrid\n' ;;
-        *) printf 'Unknown\n' ;;
-    esac
-}
-
-default_model_for_tag() {
-    case "$1" in
-        '$') printf 'haiku\n' ;;
-        *) printf 'sonnet\n' ;;
-    esac
 }
 
 apply_model_override() {
@@ -267,10 +232,13 @@ record_history() {
 }
 
 completion_tag_for_tag() {
-    case "$1" in
-        '©') printf '≠\n' ;;
-        *) printf 'º\n' ;;
-    esac
+    local completion
+    completion=$(policy_tag_completion "$1" degraded)
+    if [[ -n "$completion" ]]; then
+        printf '%s\n' "$completion"
+    else
+        printf 'º\n'
+    fi
 }
 
 build_degraded_result() {
@@ -370,15 +338,17 @@ while IFS= read -r ticket_id; do
         continue
     fi
 
-    if [[ "$route" == "hybrid" ]]; then
-        vtk add-note "$ticket_id" "Failed: hybrid route is intentionally disabled"
+    route_enabled=$(policy_route_enabled "$route")
+    if [[ "$route_enabled" != "true" ]]; then
+        vtk add-note "$ticket_id" "Failed: $(policy_route_disabled_reason "$route")"
         overall_exit=1
         continue
     fi
 
-    subagent_model=$(default_model_for_tag "$tag_char")
+    subagent_model=$(policy_tag_default_model "$tag_char")
     subagent_model=$(apply_model_override "$subagent_model" "$block_content")
-    subagent_tools=$(route_tools "$route")
+    subagent_tools=$(policy_route_tools "$route")
+    route_display_name=$(policy_route_display_name "$route")
 
     active_desc="#${tag_char} $(tag_preview "$tagged_line")"$'\t'"${vault_rel}"
     printf '%s\n' "$active_desc" > "${STATUS_DIR}/active-${ticket_id}"
@@ -388,59 +358,36 @@ while IFS= read -r ticket_id; do
     result_file="${WORK_DIR}/${ticket_id}.result.json"
     status_file="${WORK_DIR}/${ticket_id}.status"
 
-    user_prompt="Process one Obsidian tagged block and return JSON only.
-
-Ticket ID: ${ticket_id}
-Route: ${route} ($(route_name "$route"))
-File: ${file_path}
-Line number: ${line_number}
-Tag: #${tag_char} (${tag_label})
-
-Exact tagged line:
-\`\`\`
-${tagged_line}
-\`\`\`
-
-Block content:
-\`\`\`
-${block_content}
-\`\`\`
-"
-
+    FULL_FILE_SECTION=""
     if [[ "$needs_full_file" == "true" ]]; then
         file_content=$(cat "$file_path")
-        user_prompt+="
-Full file content:
-\`\`\`
-${file_content}
-\`\`\`
-"
+        FULL_FILE_SECTION=$'Full file content:\n```\n'"${file_content}"$'\n```\n\n'
     fi
 
+    DIRS_SECTION=""
     if [[ "$route" == "local-agent" ]] && [[ -n "$DIRS_PROMPT_SECTION" ]]; then
-        user_prompt+="
-Configured directories:
-${DIRS_PROMPT_SECTION}
-"
+        DIRS_SECTION=$'Configured directories:\n'"${DIRS_PROMPT_SECTION}"$'\n'
     fi
 
-    user_prompt+="
-Return ONLY valid JSON matching this schema:
-\`\`\`json
-${RESULT_SCHEMA_TEXT}
-\`\`\`
+    export TICKET_ID="$ticket_id"
+    export ROUTE_NAME="$route_display_name"
+    export ROUTE_ID="$route"
+    export FILE_PATH="$file_path"
+    export LINE_NUMBER="$line_number"
+    export TAG_CHAR="$tag_char"
+    export TAG_LABEL="$tag_label"
+    export TAGGED_LINE="$tagged_line"
+    export BLOCK_CONTENT="$block_content"
+    export FULL_FILE_SECTION="$FULL_FILE_SECTION"
+    export DIRS_SECTION="$DIRS_SECTION"
+    export RESULT_SCHEMA_TEXT="$RESULT_SCHEMA_TEXT"
+    render_template "$JOB_TEMPLATE_FILE" > "$prompt_file"
 
-Rules:
-- Do not edit the vault file directly.
-- response_lines must be an array of relative bullet lines. The first inserted line should usually start with - #Ω${tag_char} unless the correct output is a no-op success.
-- For nested children under your first bullet, use leading tabs in response_lines.
-- For #©, use outcome: no_op_success with an empty response_lines array when the assertion is correct.
-- Use append_failure_marker: true for degraded outcomes.
-- Do not wrap the JSON in markdown fences.
-"
-
-    printf '%s' "$user_prompt" > "$prompt_file"
-    printf '%s' "$SYSTEM_PROMPT" > "$system_prompt_file"
+    export BLACKLIST_CONTENT="$BLACKLIST_CONTENT"
+    export WHITELIST_CONTENT="$WHITELIST_CONTENT"
+    export ROUTE_CAPABILITY_SECTION="$(policy_route_capability_section "$route")"
+    export TAG_POLICY_SECTION="$(policy_tag_section)"
+    render_template "$SYSTEM_TEMPLATE_FILE" > "$system_prompt_file"
     if [[ "$tag_char" == '$' ]] && [[ -f "$EXCERPT_SKILL_FILE" ]]; then
         printf '\n\n---\n\n## Skill: excerpt-text\n\n%s' "$(cat "$EXCERPT_SKILL_FILE")" >> "$system_prompt_file"
     fi

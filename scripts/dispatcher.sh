@@ -30,6 +30,9 @@ TAG_BASH='#$' # alt-4  — explicit instruction with shell access
 
 SCHEMA_VERSION=1
 
+source "${SCRIPT_DIR}/lib/config.sh" 2>/dev/null || true
+source "${SCRIPT_DIR}/lib/tag_policy.sh" 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
 # Vault-scoped tk: run tk commands from inside the vault so tickets
 # are stored in $VAULT_DIR/.tickets/ (not the repo's .tickets/).
@@ -139,35 +142,6 @@ WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"; rm -f "$LOCKFILE"' EXIT
 ticket_count=0
 
-resolve_route() {
-    local tag_char="$1"
-    case "$tag_char" in
-        '$') printf 'local-agent\n' ;;
-        'ƒ'|'∆'|'∑'|'©') printf 'api-search\n' ;;
-        *) printf 'hybrid\n' ;;
-    esac
-}
-
-tag_label_for_char() {
-    local tag_char="$1"
-    case "$tag_char" in
-        '$') printf 'instruction with shell access\n' ;;
-        'ƒ') printf 'explicit instruction\n' ;;
-        '∆') printf 'evaluate and enrich\n' ;;
-        '∑') printf 'evaluate with full file context\n' ;;
-        '©') printf 'validate/check\n' ;;
-        *) printf 'unknown\n' ;;
-    esac
-}
-
-needs_full_file_for_tag() {
-    local tag_char="$1"
-    case "$tag_char" in
-        '∑') printf 'true\n' ;;
-        *) printf 'false\n' ;;
-    esac
-}
-
 extract_tag_char() {
     local line_content="$1"
     if [[ "$line_content" == *'#$'* ]]; then
@@ -245,9 +219,9 @@ while IFS= read -r result_line; do
     line_content="${remainder#*:}"
 
     tag_char=$(extract_tag_char "$line_content")
-    tag_label=$(tag_label_for_char "$tag_char")
-    route=$(resolve_route "$tag_char")
-    needs_full_file=$(needs_full_file_for_tag "$tag_char")
+    tag_label=$(policy_tag_label "$tag_char")
+    route=$(policy_tag_route "$tag_char")
+    needs_full_file=$(policy_tag_needs_full_file "$tag_char")
     block_content=$(extract_block "$file_path" "$line_num")
     tagged_line=$(awk "NR==$line_num" "$file_path")
     filename=$(basename "$file_path")

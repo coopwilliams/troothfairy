@@ -1,91 +1,79 @@
 #!/usr/bin/env bash
-# test_prompt_template.sh
-# Verifies that scripts/prompts/subagent-system.md exists and contains all required elements.
+# Verifies that structured policy and prompt templates exist and include required elements.
+
+set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TEMPLATE="$REPO_ROOT/scripts/prompts/subagent-system.md"
+POLICY="$REPO_ROOT/config/tag_policy.json"
+RESULT_SCHEMA="$REPO_ROOT/config/result-schema.json"
+SYSTEM_TEMPLATE="$REPO_ROOT/scripts/prompts/system.tmpl.md"
+JOB_TEMPLATE="$REPO_ROOT/scripts/prompts/job.tmpl.md"
 
 PASS=0
 FAIL=0
 
-assert_contains() {
-    local description="$1"
-    local pattern="$2"
-    if grep -qF -- "$pattern" "$TEMPLATE" 2>/dev/null; then
-        echo "PASS: $description"
-        PASS=$((PASS + 1))
+pass() { echo "PASS: $1"; PASS=$((PASS + 1)); }
+fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
+
+assert_file() {
+    local desc="$1" path="$2"
+    if [[ -s "$path" ]]; then
+        pass "$desc"
     else
-        echo "FAIL: $description (pattern not found: $pattern)"
-        FAIL=$((FAIL + 1))
+        fail "$desc"
     fi
 }
 
-# ── File existence and non-emptiness ─────────────────────────────────────────
+assert_contains() {
+    local desc="$1" pattern="$2" path="$3"
+    if grep -qF -- "$pattern" "$path" 2>/dev/null; then
+        pass "$desc"
+    else
+        fail "$desc (pattern not found: $pattern)"
+    fi
+}
 
-if [ -f "$TEMPLATE" ]; then
-    echo "PASS: template file exists"
-    PASS=$((PASS + 1))
-else
-    echo "FAIL: template file does not exist at $TEMPLATE"
-    FAIL=$((FAIL + 1))
-fi
+assert_jq() {
+    local desc="$1" query="$2" expected="$3" path="$4"
+    local actual
+    actual=$(jq -r "$query" "$path" 2>/dev/null || true)
+    if [[ "$actual" == "$expected" ]]; then
+        pass "$desc"
+    else
+        fail "$desc (expected: $expected, actual: $actual)"
+    fi
+}
 
-if [ -s "$TEMPLATE" ]; then
-    echo "PASS: template file is non-empty"
-    PASS=$((PASS + 1))
-else
-    echo "FAIL: template file is empty"
-    FAIL=$((FAIL + 1))
-fi
+assert_file "policy file exists" "$POLICY"
+assert_file "result schema exists" "$RESULT_SCHEMA"
+assert_file "system template exists" "$SYSTEM_TEMPLATE"
+assert_file "job template exists" "$JOB_TEMPLATE"
 
-# ── Required tag references ───────────────────────────────────────────────────
+assert_jq "policy schema version is 1" '.schema_version' '1' "$POLICY"
+assert_jq "route for #∆ is api-search" '.tags["∆"].route' 'api-search' "$POLICY"
+assert_jq "route for #$ is local-agent" '.tags["$"].route' 'local-agent' "$POLICY"
+assert_jq "full-file flag for #∑ is true" '.tags["∑"].needs_full_file' 'true' "$POLICY"
+assert_jq "default model for #$ is haiku" '.tags["$"].default_model' 'haiku' "$POLICY"
+assert_jq "completion tag for #© correct is ™" '.tags["©"].completion.correct' '™' "$POLICY"
+assert_jq "hybrid route is disabled" '.routes.hybrid.enabled' 'false' "$POLICY"
+assert_jq "api-search tools are web-only" '.routes["api-search"].allowed_tools | join(",")' 'WebSearch,WebFetch' "$POLICY"
 
-assert_contains "contains user tag #ƒ"  "#ƒ"
-assert_contains "contains user tag #∆"  "#∆"
-assert_contains "contains user tag #∑"  "#∑"
-assert_contains "contains user tag #©"  "#©"
-assert_contains "contains agent tag #Ω" "#Ω"
-assert_contains "contains agent tag #¬" "#¬"
-assert_contains "contains agent tag #§" "#§"
-assert_contains "contains agent tag #¡" "#¡"
-assert_contains "contains completion tag #º" "#º"
-assert_contains "contains completion tag #™" "#™"
-assert_contains "contains completion tag #≠" "#≠"
+assert_contains "system template includes route capability placeholder" '{{ROUTE_CAPABILITY_SECTION}}' "$SYSTEM_TEMPLATE"
+assert_contains "system template includes tag policy placeholder" '{{TAG_POLICY_SECTION}}' "$SYSTEM_TEMPLATE"
+assert_contains "system template includes blacklist placeholder" '{{BLACKLIST_CONTENT}}' "$SYSTEM_TEMPLATE"
+assert_contains "system template includes whitelist placeholder" '{{WHITELIST_CONTENT}}' "$SYSTEM_TEMPLATE"
 
-# ── Sourcing guide principles ─────────────────────────────────────────────────
+assert_contains "job template includes ticket placeholder" '{{TICKET_ID}}' "$JOB_TEMPLATE"
+assert_contains "job template includes route placeholder" '{{ROUTE_ID}}' "$JOB_TEMPLATE"
+assert_contains "job template includes tagged line placeholder" '{{TAGGED_LINE}}' "$JOB_TEMPLATE"
+assert_contains "job template includes result schema placeholder" '{{RESULT_SCHEMA_TEXT}}' "$JOB_TEMPLATE"
+assert_contains "job template mentions #© no-op success rule" 'no-op success' "$JOB_TEMPLATE"
 
-assert_contains "sourcing: never pull-quote"             "never pull-quote"
-assert_contains "sourcing: prefer primary sources"       "Prefer primary sources"
-assert_contains "sourcing: blacklist runtime injection"  "blacklist will be injected at runtime"
-assert_contains "sourcing: whitelist runtime injection"  "whitelist will be injected at runtime"
-assert_contains "sourcing: contested/political topics"   "contested or political"
-assert_contains "sourcing: no good source fallback"      "no good source exists"
-
-# ── Failure handling ──────────────────────────────────────────────────────────
-
-assert_contains "failure: #¡ after completion tag"        "#¡"
-assert_contains "failure: user tag always consumed"      "user tag is always consumed"
-
-# ── General principles ────────────────────────────────────────────────────────
-
-assert_contains "principle: no fabricated quotes"        "Never fabricate quotes"
-assert_contains "principle: do not modify outside block" "outside the specific block"
-
-# ── Examples section ──────────────────────────────────────────────────────────
-
-assert_contains "examples section exists"                "## Examples"
-assert_contains "example: #∆ block present"              "Example 1"
-assert_contains "example: #© correct case present"       "Example 2"
-assert_contains "example: #© incorrect case present"     "Example 3"
-assert_contains "example: #ƒ instruction present"        "Example 4"
-
-# ── Summary ───────────────────────────────────────────────────────────────────
+assert_jq "result schema version is 1" '.schema_version' '1' "$RESULT_SCHEMA"
+assert_jq "result schema has completion_tag field" '.completion_tag' 'º' "$RESULT_SCHEMA"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
-
-if [ "$FAIL" -gt 0 ]; then
+if [[ "$FAIL" -gt 0 ]]; then
     exit 1
 fi
-
-exit 0

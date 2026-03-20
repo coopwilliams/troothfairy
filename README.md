@@ -83,6 +83,10 @@ status_dir: /tmp/troothfairy-status
 - most relative paths resolve from the repo root
 - `./_EXCERPTS` resolves under the active vault being processed, so excerpt files go to `<vault>/_EXCERPTS/...`
 
+Tag and route policy now live in `config/tag_policy.json`. Prompt rendering uses:
+- `scripts/prompts/system.tmpl.md`
+- `scripts/prompts/job.tmpl.md`
+
 ### Excluding files
 
 Add filenames (one per line) to `tf-exclusions.md` to prevent the dispatcher from scanning them:

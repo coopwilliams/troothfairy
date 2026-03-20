@@ -17,7 +17,10 @@ fswatch → watch.sh → dispatcher.sh → orchestrator.sh → claude -p
 - `scripts/watch.sh` — fswatch daemon (start/stop/status)
 - `scripts/dispatcher.sh` — scans vault for open tags, creates one `tk` ticket per tagged block, and deduplicates/reconciles stale open jobs
 - `scripts/orchestrator.sh` — reads block-job tickets, routes them, requests structured JSON results, and applies deterministic file patches
-- `scripts/prompts/subagent-system.md` — subagent system prompt (patched at runtime with blacklist/whitelist/skills); agents return JSON, not file edits
+- `config/tag_policy.json` — single source of truth for tag semantics, routes, tools, models, and completion-tag behavior
+- `config/result-schema.json` — structured result contract returned by generation backends
+- `scripts/prompts/system.tmpl.md` — system prompt template rendered from structured policy data
+- `scripts/prompts/job.tmpl.md` — per-job prompt template rendered from structured job data
 - `scripts/troothfairy.1s.sh` — SwiftBar menu bar plugin
 - `config.yaml` — vault path, status dir, directory access permissions
 - `scripts/lib/config.sh` — shared config reader
@@ -70,7 +73,7 @@ Passed to local-agent jobs as a prompt section. Agents are told to respect acces
 tests/run_tests.sh        # discovers and runs all test_*.sh files
 ```
 
-119 assertions across 4 test suites: dispatcher, orchestrator, prompt template, watch.
+126 assertions across 5 test suites: dispatcher, orchestrator, prompt template, tag policy, watch.
 
 ## Tools / dependencies
 

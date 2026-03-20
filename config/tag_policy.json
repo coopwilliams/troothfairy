@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "routes": {
+    "local-agent": {
+      "display_name": "Local Agent",
+      "backend": "claude-cli",
+      "allowed_tools": ["Read", "Write", "Bash"],
+      "allow_capabilities": ["bash", "read", "write"],
+      "deny_capabilities": ["web_search", "web_fetch"],
+      "deterministic_patching": true,
+      "direct_vault_mutation": false,
+      "enabled": true
+    },
+    "api-search": {
+      "display_name": "API Search",
+      "backend": "claude-cli",
+      "allowed_tools": ["WebSearch", "WebFetch"],
+      "allow_capabilities": ["thinking", "web_search", "web_fetch"],
+      "deny_capabilities": ["bash", "read", "write"],
+      "deterministic_patching": true,
+      "direct_vault_mutation": false,
+      "enabled": true
+    },
+    "hybrid": {
+      "display_name": "Hybrid",
+      "backend": "reserved",
+      "allowed_tools": ["Read", "Write", "Bash", "WebSearch", "WebFetch"],
+      "allow_capabilities": ["bash", "read", "write", "web_search", "web_fetch"],
+      "deny_capabilities": [],
+      "deterministic_patching": true,
+      "direct_vault_mutation": false,
+      "enabled": false,
+      "disabled_reason": "Stub route. Do not execute until a safe design exists."
+    }
+  },
+  "tags": {
+    "ƒ": {
+      "label": "explicit instruction",
+      "meaning": "The user has written a direct instruction. Execute it precisely.",
+      "route": "api-search",
+      "needs_full_file": false,
+      "allow_empty_response": false,
+      "default_model": "sonnet",
+      "completion": {
+        "success": "º",
+        "degraded": "º"
+      }
+    },
+    "∆": {
+      "label": "evaluate and enrich",
+      "meaning": "Evaluate the user's note, add context or corrections if needed, and link to reputable sources.",
+      "route": "api-search",
+      "needs_full_file": false,
+      "allow_empty_response": false,
+      "default_model": "sonnet",
+      "completion": {
+        "success": "º",
+        "degraded": "º"
+      }
+    },
+    "∑": {
+      "label": "evaluate with full file context",
+      "meaning": "Same as #∆, but use the entire file for context.",
+      "route": "api-search",
+      "needs_full_file": true,
+      "allow_empty_response": false,
+      "default_model": "sonnet",
+      "completion": {
+        "success": "º",
+        "degraded": "º"
+      }
+    },
+    "©": {
+      "label": "validate/check",
+      "meaning": "Fact-check the assertion. If correct, return no-op success; if not, return a correction.",
+      "route": "api-search",
+      "needs_full_file": false,
+      "allow_empty_response": true,
+      "default_model": "sonnet",
+      "completion": {
+        "correct": "™",
+        "corrected": "≠",
+        "degraded": "≠"
+      }
+    },
+    "$": {
+      "label": "instruction with shell access",
+      "meaning": "Execute the instruction using local tools if needed.",
+      "route": "local-agent",
+      "needs_full_file": false,
+      "allow_empty_response": false,
+      "default_model": "haiku",
+      "completion": {
+        "success": "º",
+        "degraded": "º"
+      }
+    }
+  }
+}

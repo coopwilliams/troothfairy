@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "job_id": "ticket-id",
+  "tag": "∆",
+  "outcome": "success | no_op_success | corrected | degraded",
+  "completion_tag": "º",
+  "append_failure_marker": false,
+  "response_lines": [
+    "- #Ω∆ Main response",
+    "\t- #¬ https://example.com — source description"
+  ]
+}

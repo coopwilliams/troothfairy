@@ -432,7 +432,7 @@ else
 fi
 
 assert_contains "hybrid ticket gets add-note" "add-note ticket-hybrid" "$TK_HYBRID"
-assert_contains "hybrid failure mentions disabled route" "hybrid route is intentionally disabled" "$TK_HYBRID"
+assert_contains "hybrid failure mentions disabled route" "Stub route. Do not execute until a safe design exists." "$TK_HYBRID"
 assert_eq "hybrid route makes no claude call" "0" "$(grep -c '<<CLAUDE-CALL>>' "$CLAUDE_LOG" || true)"
 
 echo ""
