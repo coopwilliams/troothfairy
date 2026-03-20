@@ -398,6 +398,8 @@ assert_contains "local-agent uses opus override" "--model opus" "$CLAUDE_LOCAL"
 assert_contains "local-agent uses Bash tools" "Read,Write,Bash" "$CLAUDE_LOCAL"
 assert_not_contains "local-agent excludes web tools" "WebSearch,WebFetch" "$CLAUDE_LOCAL"
 assert_contains "configured directories included for local-agent" "Configured directories" "$CLAUDE_LOCAL"
+assert_contains "excerpt dir resolves under vault path" "${VAULT_DIR}/_EXCERPTS [write-only]" "$CLAUDE_LOCAL"
+assert_not_contains "excerpt dir is not repo-root relative" "${REPO_ROOT}/./_EXCERPTS" "$CLAUDE_LOCAL"
 assert_contains "local-agent patch applied" "#Ω$ Local shell-assisted response." "$LOCAL_FILE"
 
 echo ""

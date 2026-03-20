@@ -36,13 +36,22 @@ get_config() {
 }
 
 # get_dirs — print configured directory entries, one per line as "absolute_path access"
-# Parses the dirs: list block from config.yaml; resolves relative paths against repo root.
+# Parses the dirs: list block from config.yaml.
+# Relative paths resolve against the repo root, except write targets under
+# `./_EXCERPTS`, which resolve against the active vault path.
 get_dirs() {
+    local active_vault_root="${1:-}"
     local repo_root
     repo_root="$(resolve_repo_root)" || return 0
     local config_file="${repo_root}/config.yaml"
     [[ -f "$config_file" ]] || return 0
-    awk -v repo_root="$repo_root" '
+    local vault_root
+    if [[ -n "$active_vault_root" ]]; then
+        vault_root="$active_vault_root"
+    else
+        vault_root="$(resolve_vault_path 2>/dev/null)" || vault_root=""
+    fi
+    awk -v repo_root="$repo_root" -v vault_root="$vault_root" '
     /^dirs:/              { in_dirs=1; next }
     in_dirs && /^[^[:space:]]/ { in_dirs=0 }
     in_dirs && /^[[:space:]]*-[[:space:]]/ {
@@ -53,7 +62,14 @@ get_dirs() {
         n = split(line, parts, /[[:space:]]+/)
         path   = parts[1]
         access = (n >= 2) ? parts[2] : "read"
-        if (substr(path, 1, 1) != "/") path = repo_root "/" path
+        if (substr(path, 1, 1) != "/") {
+            if (vault_root != "" && path ~ /^\.\/_EXCERPTS(\/|$)/) {
+                sub(/^\.\//, "", path)
+                path = vault_root "/" path
+            } else {
+                path = repo_root "/" path
+            }
+        }
         print path " " access
     }
     ' "$config_file"

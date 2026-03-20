@@ -58,7 +58,7 @@ while IFS=' ' read -r dir_path dir_access; do
         *) access_label="${dir_access:-read-only}" ;;
     esac
     DIRS_PROMPT_SECTION+="- ${dir_path} [${access_label}]"$'\n'
-done < <(get_dirs 2>/dev/null || true)
+done < <(get_dirs "$VAULT_DIR" 2>/dev/null || true)
 
 RAW_SYSTEM_PROMPT=$(cat "$SYSTEM_PROMPT_FILE")
 SYSTEM_PROMPT="${RAW_SYSTEM_PROMPT//'[blacklist will be injected at runtime]'/$BLACKLIST_CONTENT}"
