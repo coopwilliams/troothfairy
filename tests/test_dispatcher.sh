@@ -69,13 +69,45 @@ cat > "${FAKE_BIN}/tk" << 'TKSTUB'
 #!/usr/bin/env bash
 # Fake tk: record each invocation with a delimiter, then all args
 printf '<<CALL>> %s\n' "$*" >> "$TK_LOG"
-exit 0
+case "$1" in
+    list)
+        if [[ "${TK_LIST_MODE:-empty}" == "existing-open-job" || "${TK_LIST_MODE:-empty}" == "stale-open-job" ]]; then
+            printf '%s\n' "troothfairy-existing"
+        fi
+        exit 0
+        ;;
+    show)
+        if [[ "$2" == "troothfairy-existing" ]]; then
+            cat <<'EOF'
+{
+  "schema_version": 1,
+  "file_path": "__FILE_A__",
+  "vault_rel": "file_a",
+  "file_basename": "file_a.md",
+  "line_number": 1,
+  "tag_char": "ƒ",
+  "tag_label": "explicit instruction",
+  "route": "api-search",
+  "needs_full_file": false,
+  "tagged_line": "#ƒ This is a plain instruction line — not a bullet.",
+  "block_content": "#ƒ This is a plain instruction line — not a bullet."
+}
+EOF
+            exit 0
+        fi
+        exit 1
+        ;;
+    *)
+        exit 0
+        ;;
+esac
 TKSTUB
 chmod +x "${FAKE_BIN}/tk"
 
 # Put fake bin first on PATH for this session
 export PATH="${FAKE_BIN}:${PATH}"
 export TK_LOG   # dispatcher inherits this env var (log path is used by stub)
+export TK_LIST_MODE=empty
 
 # Stub out the orchestrator so the dispatcher doesn't try to run it
 export ORCHESTRATOR=/usr/bin/true
@@ -133,6 +165,7 @@ rm -f /tmp/TROOTHLOCK
 # ---------------------------------------------------------------------------
 # Run dispatcher
 # ---------------------------------------------------------------------------
+perl -0pi -e 's#__FILE_A__#'"${VAULT_DIR//\//\\/}"'/file_a.md#g' "${FAKE_BIN}/tk"
 DISPATCHER_OUTPUT=$("$DISPATCHER" "$VAULT_DIR" 2>&1)
 DISPATCHER_EXIT=$?
 
@@ -155,7 +188,7 @@ fi
 # Expected: 5 tickets (one per tagged block across file_a.md and file_b.md)
 # ---------------------------------------------------------------------------
 if [[ -f "$TK_LOG" ]]; then
-    ticket_count=$(grep -c '<<CALL>>' "$TK_LOG" || true)
+    ticket_count=$(grep -c '<<CALL>> create ' "$TK_LOG" || true)
 else
     ticket_count=0
 fi
@@ -255,7 +288,7 @@ assert_eq "second run with lock exits 0" "0" "$SECOND_RUN_EXIT"
 
 # Ticket count must still be 5 (no new calls added)
 if [[ -f "$TK_LOG" ]]; then
-    ticket_count_after=$(grep -c '<<CALL>>' "$TK_LOG" || true)
+    ticket_count_after=$(grep -c '<<CALL>> create ' "$TK_LOG" || true)
 else
     ticket_count_after=0
 fi
@@ -267,7 +300,60 @@ assert_eq "no additional tickets created when locked" "5" "$ticket_count_after"
 assert_contains "dispatcher prints ticket count summary" "created 5 ticket" "$DISPATCHER_OUTPUT"
 
 # ---------------------------------------------------------------------------
-# Test 14: tags flag included in tk call
+# Test 15: existing open block job is not duplicated
+# ---------------------------------------------------------------------------
+rm -f "$TK_LOG"
+touch "$TK_LOG"
+export TK_LIST_MODE=existing-open-job
+THIRD_RUN_OUTPUT=$("$DISPATCHER" "$VAULT_DIR" 2>&1)
+THIRD_RUN_EXIT=$?
+
+assert_eq "run with existing open job exits 0" "0" "$THIRD_RUN_EXIT"
+if [[ -f "$TK_LOG" ]]; then
+    create_count_dedup=$(grep -c '<<CALL>> create ' "$TK_LOG" || true)
+else
+    create_count_dedup=0
+fi
+assert_eq "existing open block job is not re-created" "4" "$create_count_dedup"
+assert_contains "dispatcher summary reflects deduped count" "created 4 ticket" "$THIRD_RUN_OUTPUT"
+
+# ---------------------------------------------------------------------------
+# Test 16: stale open job is auto-closed and does not block new work
+# ---------------------------------------------------------------------------
+cat > "${VAULT_DIR}/file_a.md" << 'EOF'
+This line no longer has a Troothfairy tag.
+
+Some normal prose that should be ignored.
+
+- #∆ Top-level bullet with evaluate tag
+	- Child bullet one
+	- Child bullet two
+- Untagged sibling bullet (ends the previous block)
+- #© Validate this bullet
+	- Nested child under validate bullet
+- Another untagged bullet (ends the © block)
+EOF
+
+rm -f "$TK_LOG"
+touch "$TK_LOG"
+export TK_LIST_MODE=stale-open-job
+FOURTH_RUN_OUTPUT=$("$DISPATCHER" "$VAULT_DIR" 2>&1)
+FOURTH_RUN_EXIT=$?
+
+assert_eq "run with stale open job exits 0" "0" "$FOURTH_RUN_EXIT"
+if [[ -f "$TK_LOG" ]]; then
+    create_count_stale=$(grep -c '<<CALL>> create ' "$TK_LOG" || true)
+    stale_close_line=$(grep '<<CALL>> close troothfairy-existing' "$TK_LOG" || true)
+else
+    create_count_stale=0
+    stale_close_line=""
+fi
+assert_eq "stale open block job does not suppress new create count" "4" "$create_count_stale"
+assert_contains "stale job gets auto-closed" "close troothfairy-existing" "$stale_close_line"
+assert_contains "dispatcher summary reflects stale cleanup" "created 4 ticket" "$FOURTH_RUN_OUTPUT"
+
+# ---------------------------------------------------------------------------
+# Test 17: tags flag included in tk call
 # ---------------------------------------------------------------------------
 assert_contains "tk call includes --tags troothfairy,auto" "--tags troothfairy,auto" "$ALL_CALLS"
 

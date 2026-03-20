@@ -81,9 +81,15 @@ EOF
 )
 
 extract_json_payload() {
-    awk '
-    /^[[:space:]]*\{/ { capture=1 }
-    capture { print }
+    perl -CSDA -0ne '
+        if (/```(?:json)?\s*(.*?)\s*```/s) {
+            print $1;
+            exit;
+        }
+        if (/(\{(?:(?>[^{}]+)|(?1))*\})/s) {
+            print $1;
+            exit;
+        }
     ' <<< "$1"
 }
 
@@ -260,6 +266,52 @@ record_history() {
     printf '%s %s #%s %s\t%s\n' "$timestamp" "$success_marker" "$tag_char" "$preview" "$vault_rel" >> "${STATUS_DIR}/history.log"
 }
 
+completion_tag_for_tag() {
+    case "$1" in
+        '©') printf '≠\n' ;;
+        *) printf 'º\n' ;;
+    esac
+}
+
+build_degraded_result() {
+    local ticket_id="$1"
+    local job_file="$2"
+    local result_file="$3"
+    local error_detail="$4"
+
+    local tag_char completion_tag degraded_text
+    tag_char=$(jq -r '.tag_char' "$job_file")
+    completion_tag=$(completion_tag_for_tag "$tag_char")
+
+    case "$error_detail" in
+        invalid_json*)
+            degraded_text="The agent returned an invalid structured result. Troothfairy marked this block as degraded."
+            ;;
+        claude_failed*)
+            degraded_text="The agent failed before returning a structured result. Troothfairy marked this block as degraded."
+            ;;
+        *)
+            degraded_text="Troothfairy could not complete this block reliably and marked it as degraded."
+            ;;
+    esac
+
+    jq -n \
+        --argjson schema_version "$RESULT_SCHEMA_VERSION" \
+        --arg job_id "$ticket_id" \
+        --arg tag "$tag_char" \
+        --arg completion_tag "$completion_tag" \
+        --arg response_line "- #Ω${tag_char} ${degraded_text}" \
+        '{
+            schema_version: $schema_version,
+            job_id: $job_id,
+            tag: $tag,
+            outcome: "degraded",
+            completion_tag: $completion_tag,
+            append_failure_marker: true,
+            response_lines: [$response_line]
+        }' > "$result_file"
+}
+
 TICKET_IDS=$(vtk list --status=open --tags=troothfairy 2>/dev/null | awk '{print $1}' | grep -E '^[a-zA-Z0-9_-]+$' || true)
 
 if [[ -z "$TICKET_IDS" ]]; then
@@ -279,6 +331,7 @@ declare -a JOB_FILES=()
 declare -a RESULT_FILES=()
 declare -a STATUS_FILES=()
 declare -a ACTIVE_FILES=()
+declare -a RESULT_MARKERS=()
 
 overall_exit=0
 
@@ -436,6 +489,7 @@ Rules:
     RESULT_FILES+=("$result_file")
     STATUS_FILES+=("$status_file")
     ACTIVE_FILES+=("${STATUS_DIR}/active-${ticket_id}")
+    RESULT_MARKERS+=("pending")
 
     echo "orchestrator: launched worker for ticket $ticket_id (route: $route, file: $file_basename, pid: $!)"
 done <<< "$TICKET_IDS"
@@ -467,11 +521,14 @@ for i in "${!PIDS[@]}"; do
 
     if [[ "$status_content" == "0" ]]; then
         SUCCESS_RECORDS+=("${ticket_id}"$'\t'"${job_file}"$'\t'"${result_file}")
+        RESULT_MARKERS[$i]="success"
     else
         error_detail="${status_content#1 }"
         [[ -n "$error_detail" ]] || error_detail="worker failed before producing a result"
-        vtk add-note "$ticket_id" "Failed: ${error_detail}" 2>/dev/null || true
-        record_history "$job_file" "✗"
+        build_degraded_result "$ticket_id" "$job_file" "$result_file" "$error_detail"
+        printf '%s\n' "Degraded: ${error_detail}" > "${WORK_DIR}/${ticket_id}.note"
+        SUCCESS_RECORDS+=("${ticket_id}"$'\t'"${job_file}"$'\t'"${result_file}")
+        RESULT_MARKERS[$i]="degraded"
         overall_exit=1
     fi
 done
@@ -512,8 +569,16 @@ if [[ -s "$SUCCESS_MANIFEST" ]]; then
             apply_exit=$?
             if [[ "$apply_exit" -eq 0 ]]; then
                 offset=$((offset + inserted_count))
+                note_file="${WORK_DIR}/${ticket_id}.note"
+                if [[ -f "$note_file" ]]; then
+                    vtk add-note "$ticket_id" "$(cat "$note_file")" 2>/dev/null || true
+                fi
                 if vtk close "$ticket_id" 2>/dev/null; then
-                    record_history "$job_file" "✓"
+                    if [[ -f "$note_file" ]]; then
+                        record_history "$job_file" "✗"
+                    else
+                        record_history "$job_file" "✓"
+                    fi
                     echo "orchestrator: ticket $ticket_id closed (patched successfully)"
                 else
                     vtk add-note "$ticket_id" "Failed: patch applied but ticket could not be closed" 2>/dev/null || true

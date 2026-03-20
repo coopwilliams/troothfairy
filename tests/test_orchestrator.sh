@@ -227,7 +227,10 @@ EOF
 fi
 
 if [[ "$ticket_id" == "ticket-local" ]]; then
-    cat <<EOF
+    cat <<'EOF'
+Perfect! The excerpt-text job is complete.
+
+```json
 {
   "schema_version": 1,
   "job_id": "ticket-local",
@@ -239,6 +242,7 @@ if [[ "$ticket_id" == "ticket-local" ]]; then
     "- #Ω$ Local shell-assisted response."
   ]
 }
+```
 EOF
     exit 0
 fi
@@ -358,11 +362,12 @@ fi
 
 assert_contains "successful ticket-a still closes" "close ticket-a" "$TK_FAIL"
 assert_contains "successful ticket-b still closes" "close ticket-b" "$TK_FAIL"
-assert_not_contains "failed ticket-c does not close" "close ticket-c" "$TK_FAIL"
-assert_contains "failed ticket-c gets add-note" "add-note ticket-c" "$TK_FAIL"
-assert_contains "failure note contains Failed" "Failed:" "$TK_FAIL"
+assert_contains "degraded ticket-c still closes" "close ticket-c" "$TK_FAIL"
+assert_contains "degraded ticket-c gets add-note" "add-note ticket-c" "$TK_FAIL"
+assert_contains "degraded note recorded" "Degraded:" "$TK_FAIL"
 assert_contains "file_a still patched in failure suite" "#Ω∆ Added context for the transformer note." "$FILE_A_FAIL"
-assert_not_contains "failed file_b remains unpatched" "#Ω∑ Uses full-file context correctly." "$FILE_B_FAIL"
+assert_contains "failed file_b gets degraded marker" "#º #¡ Evaluate this with full context" "$FILE_B_FAIL"
+assert_contains "failed file_b gets degraded response" "#Ω∑ The agent failed before returning a structured result." "$FILE_B_FAIL"
 
 echo ""
 

@@ -185,6 +185,56 @@ extract_tag_char() {
     fi
 }
 
+extract_json_payload() {
+    perl -CSDA -0ne '
+        if (/(\{(?:(?>[^{}]+)|(?1))*\})/s) {
+            print $1;
+            exit;
+        }
+    ' <<< "$1"
+}
+
+build_job_key() {
+    local file_path="$1"
+    local line_num="$2"
+    local tag_char="$3"
+    printf '%s|%s|%s\n' "$file_path" "$line_num" "$tag_char"
+}
+
+is_ticket_still_live() {
+    local file_path="$1"
+    local line_num="$2"
+    local tagged_line="$3"
+
+    [[ -f "$file_path" ]] || return 1
+    current_line=$(awk "NR==$line_num" "$file_path" 2>/dev/null || true)
+    [[ -n "$current_line" ]] || return 1
+    [[ "$current_line" == "$tagged_line" ]]
+}
+
+OPEN_JOB_KEYS=$(
+    vtk list --status=open --tags=troothfairy 2>/dev/null \
+    | awk '{print $1}' \
+    | grep -E '^[a-zA-Z0-9_-]+$' \
+    | while IFS= read -r ticket_id; do
+        [[ -n "$ticket_id" ]] || continue
+        ticket_body=$(vtk show "$ticket_id" 2>/dev/null || true)
+        job_json=$(extract_json_payload "$ticket_body")
+        [[ -n "$job_json" ]] || continue
+        file_path="$(printf '%s\n' "$job_json" | jq -r '.file_path // empty')"
+        line_number="$(printf '%s\n' "$job_json" | jq -r '.line_number // empty')"
+        tag_char="$(printf '%s\n' "$job_json" | jq -r '.tag_char // empty')"
+        tagged_line="$(printf '%s\n' "$job_json" | jq -r '.tagged_line // empty')"
+        if is_ticket_still_live "$file_path" "$line_number" "$tagged_line"; then
+            printf '%s|%s|%s\n' "$file_path" "$line_number" "$tag_char"
+        else
+            vtk add-note "$ticket_id" "Stale job auto-closed: source tag is no longer present at the recorded file/line" >/dev/null 2>&1 || true
+            vtk close "$ticket_id" >/dev/null 2>&1 || true
+        fi
+    done \
+    || true
+)
+
 while IFS= read -r result_line; do
     [[ -z "$result_line" ]] && continue
 
@@ -204,6 +254,11 @@ while IFS= read -r result_line; do
     vault_rel="${file_path#"$VAULT_DIR"}"
     vault_rel="${vault_rel#/}"
     vault_rel="${vault_rel%.md}"
+    job_key=$(build_job_key "$file_path" "$line_num" "$tag_char")
+
+    if [[ -n "$OPEN_JOB_KEYS" ]] && printf '%s\n' "$OPEN_JOB_KEYS" | grep -Fxq "$job_key"; then
+        continue
+    fi
 
     payload_file="${WORK_DIR}/job-${ticket_count}.json"
     jq -n \
@@ -236,6 +291,12 @@ while IFS= read -r result_line; do
         -t task \
         -d "$(cat "$payload_file")" \
         --tags troothfairy,auto
+
+    if [[ -n "$OPEN_JOB_KEYS" ]]; then
+        OPEN_JOB_KEYS="${OPEN_JOB_KEYS}"$'\n'"${job_key}"
+    else
+        OPEN_JOB_KEYS="${job_key}"
+    fi
 
     ticket_count=$((ticket_count + 1))
 done <<< "$GREP_RESULTS"
