@@ -1,6 +1,6 @@
 ---
 id: orb-ekiz
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-03-20T03:00:36Z

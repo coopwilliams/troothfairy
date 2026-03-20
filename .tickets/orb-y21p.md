@@ -33,3 +33,9 @@ As Troothfairy moves to block-level jobs and structured patch intents, determini
 - Patch behavior is testable independently from model execution.
 - Mixed-route jobs in one file can be applied through the same patch engine safely.
 
+
+## Notes
+
+**2026-03-20T04:19:44Z**
+
+Handoff note: the patch engine can now depend on config/tag_policy.json and config/result-schema.json as the source of truth for completion-tag behavior, route policy, and structured result shape. It should consume validated patch intents rather than re-deriving protocol rules from prompts.

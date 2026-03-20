@@ -1,6 +1,6 @@
 ---
 id: orb-0wpi
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-03-19T02:45:03Z
@@ -27,3 +27,7 @@ Benefits:
 - #© silent/correct case is trivial: empty output = just do the tag swap
 
 Output format TBD — sentinel-wrapped bullet lines.
+
+**2026-03-20T04:19:44Z**
+
+Subsumed by orb-p451. Orchestrator now consumes structured JSON results and applies deterministic file edits itself rather than letting agents mutate vault files directly.

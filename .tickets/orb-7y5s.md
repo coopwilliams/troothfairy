@@ -1,6 +1,6 @@
 ---
 id: orb-7y5s
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-03-18T18:16:57Z
@@ -12,3 +12,9 @@ assignee: coopwilliams
 
 Each user tag (#ƒ, #∆, #∑, #©, #$) should have a defined set of allowed tools and skills, enforced by the orchestrator when building the subagent command. Currently all non-#$ tags get the same default toolset. Tighter scoping reduces attack surface (especially for tags processing web-fetched content) and makes the permission model explicit. E.g. #© (fact-check) probably doesn't need Write, #∆ doesn't need Bash, etc. Define a tag→permissions mapping in config or orchestrator and wire it through.
 
+
+## Notes
+
+**2026-03-20T04:19:44Z**
+
+Subsumed by orb-p451 and orb-1mod. Tag-to-route/tool/model policy now lives in config/tag_policy.json and is enforced by dispatcher/orchestrator policy lookups.
