@@ -2,20 +2,22 @@
 
 ## What this is
 
-Obsidian vault auto-enrichment system. Users tag lines in their vault with unicode tags (#ƒ, #∆, #∑, #©, #$), fswatch detects changes, the dispatcher creates tickets, and the orchestrator spawns Claude subagents to process each tagged block in parallel.
+Obsidian vault auto-enrichment system. Users tag lines in their vault with unicode tags (#ƒ, #∆, #∑, #©, #$), fswatch detects changes, the dispatcher creates one job per tagged block, and the orchestrator runs generation work in parallel before applying deterministic patches to the vault file.
 
 ## Architecture
 
 ```
-fswatch → watch.sh → dispatcher.sh → orchestrator.sh → claude -p (subagents)
-                                                      ↕
-                                              orb-vault/*.md
+fswatch → watch.sh → dispatcher.sh → orchestrator.sh → claude -p
+                                                      ↓
+                                            structured JSON result
+                                                      ↓
+                                           deterministic vault patching
 ```
 
 - `scripts/watch.sh` — fswatch daemon (start/stop/status)
-- `scripts/dispatcher.sh` — scans vault for open tags, groups by file, creates `tk` tickets
-- `scripts/orchestrator.sh` — reads tickets, builds per-subagent prompts, spawns `claude -p` in parallel
-- `scripts/prompts/subagent-system.md` — subagent system prompt (patched at runtime with blacklist/whitelist/skills)
+- `scripts/dispatcher.sh` — scans vault for open tags, creates one `tk` ticket per tagged block, and deduplicates/reconciles stale open jobs
+- `scripts/orchestrator.sh` — reads block-job tickets, routes them, requests structured JSON results, and applies deterministic file patches
+- `scripts/prompts/subagent-system.md` — subagent system prompt (patched at runtime with blacklist/whitelist/skills); agents return JSON, not file edits
 - `scripts/troothfairy.1s.sh` — SwiftBar menu bar plugin
 - `config.yaml` — vault path, status dir, directory access permissions
 - `scripts/lib/config.sh` — shared config reader
@@ -45,20 +47,22 @@ Even on failure, the user tag must be replaced with a completion tag. This is no
 
 ## Subagent permissions
 
-Default tools: `Edit,Read,Write,WebSearch,WebFetch` on model `sonnet`.
+`#ƒ`, `#∆`, `#∑`, `#©` currently route through `api-search` with `WebSearch,WebFetch` on model `sonnet`.
 
-`#$` tags add `Bash` and default to `haiku`. The excerpt-text skill (from `~/.claude/skills/excerpt-text/SKILL.md`) is injected into the system prompt for `#$` subagents.
+`#$` routes through `local-agent` with `Read,Write,Bash` and defaults to `haiku`. The excerpt-text skill (from `~/.claude/skills/excerpt-text/SKILL.md`) is injected into the system prompt for `#$` subagents.
 
-Explicit `#opus` or `#sonnet` modifiers override the model. Bash is never granted without `#$` — this is a security boundary against prompt injection from web content.
+Explicit `#opus`, `#sonnet`, or `#haiku` modifiers override the model. Bash is never granted without `#$` — this is a security boundary against prompt injection from web content.
+
+`hybrid` exists in the routing model but is intentionally disabled.
 
 ## Directory access (config.yaml `dirs`)
 
-Passed to subagents as a prompt section. Subagents are told to respect access levels.
+Passed to local-agent jobs as a prompt section. Agents are told to respect access levels.
 
 - `./sourcing/tags` — read (curated topic URLs)
 - `/Users/cooperwilliams/Documents/02-books` — read (ebooks, searched with `rga`)
 - `/Users/cooperwilliams/Documents/03-papers-essays` — read
-- `./_EXCERPTS` — write (excerpt output directory in vault)
+- `./_EXCERPTS` — write (resolved under the active vault path, not the repo root)
 
 ## Testing
 
@@ -66,7 +70,7 @@ Passed to subagents as a prompt section. Subagents are told to respect access le
 tests/run_tests.sh        # discovers and runs all test_*.sh files
 ```
 
-107 assertions across 4 test suites: dispatcher, orchestrator, prompt template, watch.
+119 assertions across 4 test suites: dispatcher, orchestrator, prompt template, watch.
 
 ## Tools / dependencies
 
@@ -76,6 +80,8 @@ tests/run_tests.sh        # discovers and runs all test_*.sh files
 - `swiftbar` — macOS menu bar plugin host
 
 Vault-scoped tickets use `vtk()` wrapper: `TICKETS_DIR="${VAULT_DIR}/.tickets" tk "$@"`
+
+Open tickets in the vault are not watched directly because `.tickets` is excluded from fswatch and dispatcher scans. Stale open block jobs are reconciled and auto-closed by the dispatcher if their recorded tagged line no longer exists at the recorded file/line.
 
 Note: `tk close` takes only one ticket ID at a time. Close multiple with separate calls: `tk close id1 && tk close id2 && tk close id3`
 
@@ -87,6 +93,7 @@ Note: `tk close` takes only one ticket ID at a time. Close multiple with separat
 - Excerpt files go in `orb-vault/_EXCERPTS/<topic-slug>/` with YAML frontmatter including `filepath`, `page_start`, `page_end`, `search_string`, `context_lines`.
 - Newly created vault files must have `agent-added: true` in frontmatter.
 - File links in agent responses use Obsidian full-path wikilinks: `[[_EXCERPTS/topic/filename|filename]]`
+- Agents return structured JSON results; orchestrator owns completion-tag swaps, `#¡` placement, and inserted response bullets.
 
 ## Git workflow
 - Test before committing to make sure nothing breaks.
@@ -100,3 +107,4 @@ Note: `tk close` takes only one ticket ID at a time. Close multiple with separat
 - **YAML frontmatter**: strings must be double-quoted or they can break parsing.
 - **Tilde in bash**: `~` does not expand inside double quotes. Use `$HOME`.
 - **Subagents don't load skills**: Skills from `.claude/skills/` are not available in `-p` mode subagents. The orchestrator must inject skill content into the system prompt explicitly.
+- **Perl locale warning in tests**: some shells emit a harmless locale warning for `perl` when `LC_ALL=C.UTF-8`; tests still pass.

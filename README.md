@@ -25,7 +25,7 @@ Write notes in your Obsidian vault using bullet points. Add a tag at the start o
 | `#©` | alt-g | Fact-check: pass silently or correct |
 | `#$` | shift-4 | Explicit instruction with shell/Bash access (runs on haiku) |
 
-Save the file. Troothfairy detects the change, processes your tags, and edits the file in place.
+Save the file. Troothfairy detects the change, creates one job per tagged block, asks a model to return structured JSON, and then applies deterministic edits to the file.
 
 ### Example
 
@@ -79,6 +79,10 @@ max_recent_jobs: 5               # Recent jobs shown in menu bar
 status_dir: /tmp/troothfairy-status
 ```
 
+`dirs:` entries are interpreted as follows:
+- most relative paths resolve from the repo root
+- `./_EXCERPTS` resolves under the active vault being processed, so excerpt files go to `<vault>/_EXCERPTS/...`
+
 ### Excluding files
 
 Add filenames (one per line) to `tf-exclusions.md` to prevent the dispatcher from scanning them:
@@ -113,9 +117,9 @@ Control which domains the agent links to:
 
 ```
 fswatch (file watcher)
-  → dispatcher.sh (scans for open tags, creates tk tickets, batches by file)
-    → orchestrator.sh (spawns one claude subagent per ticket in parallel)
-      → claude CLI (processes tags, edits vault files in place)
+  → dispatcher.sh (scans for open tags, creates one tk ticket per tagged block)
+    → orchestrator.sh (runs block jobs in parallel, gathers structured results)
+      → deterministic patching (applies tag swaps and inserted bullets per file)
 ```
 
 All inter-process state is managed through `tk` tickets and status files in `/tmp/troothfairy-status/`.
