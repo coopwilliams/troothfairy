@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "file_path": "/absolute/path/to/file.md",
+  "vault_rel": "note/path",
+  "file_basename": "file.md",
+  "line_number": 42,
+  "tag_char": "∆",
+  "tag_label": "evaluate and enrich",
+  "route": "api-search",
+  "needs_full_file": false,
+  "tagged_line": "- #∆ Example tagged line",
+  "block_content": "- #∆ Example tagged line\n\t- Nested child"
+}

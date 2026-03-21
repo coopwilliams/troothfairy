@@ -252,6 +252,21 @@ if [[ "$ticket_id" == "ticket-bad-json" ]]; then
     exit 0
 fi
 
+if [[ "$ticket_id" == "ticket-bad-version" ]]; then
+    cat <<EOF
+{
+  "schema_version": 99,
+  "job_id": "ticket-bad-version",
+  "tag": "∆",
+  "outcome": "success",
+  "completion_tag": "º",
+  "append_failure_marker": false,
+  "response_lines": []
+}
+EOF
+    exit 0
+fi
+
 cat <<EOF
 {
   "schema_version": 1,
@@ -434,6 +449,81 @@ fi
 assert_contains "hybrid ticket gets add-note" "add-note ticket-hybrid" "$TK_HYBRID"
 assert_contains "hybrid failure mentions disabled route" "Stub route. Do not execute until a safe design exists." "$TK_HYBRID"
 assert_eq "hybrid route makes no claude call" "0" "$(grep -c '<<CLAUDE-CALL>>' "$CLAUDE_LOG" || true)"
+
+echo ""
+echo "=== Suite 5: Unsupported job payload versions are rejected clearly ==="
+rm -rf "$VAULT_DIR" "$TICKET_DATA_DIR" "$STATUS_DIR"
+mkdir -p "$VAULT_DIR" "$TICKET_DATA_DIR" "$STATUS_DIR"
+: > "$TK_LOG"
+: > "$CLAUDE_LOG"
+printf '%s\n' "ticket-old-job" > "$TK_LIST_FILE"
+
+cat > "${VAULT_DIR}/old-job.md" << 'EOF'
+- #∆ Old payload version
+EOF
+
+jq -n \
+    --arg file_path "${VAULT_DIR}/old-job.md" \
+    '{
+        schema_version: 99,
+        file_path: $file_path,
+        vault_rel: "old-job",
+        file_basename: "old-job.md",
+        line_number: 1,
+        tag_char: "∆",
+        tag_label: "evaluate and enrich",
+        route: "api-search",
+        needs_full_file: false,
+        tagged_line: "- #∆ Old payload version",
+        block_content: "- #∆ Old payload version"
+    }' > "${TICKET_DATA_DIR}/ticket-old-job.json"
+
+ORCH_OLD_JOB_OUTPUT=$("$ORCHESTRATOR" "$VAULT_DIR" 2>&1)
+ORCH_OLD_JOB_EXIT=$?
+TK_OLD_JOB=$(cat "$TK_LOG")
+
+if [[ "$ORCH_OLD_JOB_EXIT" -ne 0 ]]; then
+    pass "old job payload suite exits non-zero"
+else
+    fail "old job payload suite should exit non-zero"
+fi
+
+assert_contains "unsupported job version gets add-note" "add-note ticket-old-job" "$TK_OLD_JOB"
+assert_contains "unsupported job version is explicit" "unsupported block-job schema version 99 (expected 1)" "$TK_OLD_JOB"
+assert_eq "unsupported job version makes no claude call" "0" "$(grep -c '<<CLAUDE-CALL>>' "$CLAUDE_LOG" || true)"
+
+echo ""
+echo "=== Suite 6: Unsupported result payload versions degrade safely ==="
+rm -rf "$VAULT_DIR" "$TICKET_DATA_DIR" "$STATUS_DIR"
+mkdir -p "$VAULT_DIR" "$TICKET_DATA_DIR" "$STATUS_DIR"
+: > "$TK_LOG"
+: > "$CLAUDE_LOG"
+printf '%s\n' "ticket-bad-version" > "$TK_LIST_FILE"
+
+cat > "${VAULT_DIR}/bad-result.md" << 'EOF'
+- #∆ Result version mismatch
+EOF
+
+write_job_json "${TICKET_DATA_DIR}/ticket-bad-version.json" \
+    "${VAULT_DIR}/bad-result.md" "bad-result.md" "bad-result" 1 "∆" "evaluate and enrich" "api-search" false \
+    "- #∆ Result version mismatch" \
+    "- #∆ Result version mismatch"
+
+ORCH_BAD_RESULT_OUTPUT=$("$ORCHESTRATOR" "$VAULT_DIR" 2>&1)
+ORCH_BAD_RESULT_EXIT=$?
+TK_BAD_RESULT=$(cat "$TK_LOG")
+BAD_RESULT_FILE=$(cat "${VAULT_DIR}/bad-result.md")
+
+if [[ "$ORCH_BAD_RESULT_EXIT" -ne 0 ]]; then
+    pass "bad result payload suite exits non-zero"
+else
+    fail "bad result payload suite should exit non-zero"
+fi
+
+assert_contains "unsupported result version still closes ticket" "close ticket-bad-version" "$TK_BAD_RESULT"
+assert_contains "unsupported result version gets degraded note" "add-note ticket-bad-version" "$TK_BAD_RESULT"
+assert_contains "unsupported result version is surfaced" "unsupported-result-schema-version=99 expected=1" "$TK_BAD_RESULT"
+assert_contains "unsupported result version degrades file safely" "#º #¡ Result version mismatch" "$BAD_RESULT_FILE"
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed."

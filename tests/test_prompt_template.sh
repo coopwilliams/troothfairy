@@ -5,6 +5,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 POLICY="$REPO_ROOT/config/tag_policy.json"
+BLOCK_JOB_SCHEMA="$REPO_ROOT/config/block-job-schema.json"
 RESULT_SCHEMA="$REPO_ROOT/config/result-schema.json"
 SYSTEM_TEMPLATE="$REPO_ROOT/scripts/prompts/system.tmpl.md"
 JOB_TEMPLATE="$REPO_ROOT/scripts/prompts/job.tmpl.md"
@@ -45,11 +46,13 @@ assert_jq() {
 }
 
 assert_file "policy file exists" "$POLICY"
+assert_file "block-job schema exists" "$BLOCK_JOB_SCHEMA"
 assert_file "result schema exists" "$RESULT_SCHEMA"
 assert_file "system template exists" "$SYSTEM_TEMPLATE"
 assert_file "job template exists" "$JOB_TEMPLATE"
 
 assert_jq "policy schema version is 1" '.schema_version' '1' "$POLICY"
+assert_jq "block-job schema version is 1" '.schema_version' '1' "$BLOCK_JOB_SCHEMA"
 assert_jq "route for #∆ is api-search" '.tags["∆"].route' 'api-search' "$POLICY"
 assert_jq "route for #$ is local-agent" '.tags["$"].route' 'local-agent' "$POLICY"
 assert_jq "full-file flag for #∑ is true" '.tags["∑"].needs_full_file' 'true' "$POLICY"
@@ -71,6 +74,8 @@ assert_contains "job template mentions #© no-op success rule" 'no-op success' "
 
 assert_jq "result schema version is 1" '.schema_version' '1' "$RESULT_SCHEMA"
 assert_jq "result schema has completion_tag field" '.completion_tag' 'º' "$RESULT_SCHEMA"
+assert_jq "every tag route resolves to a defined route" '. as $root | [$root.tags | to_entries[] | ($root.routes[.value.route] != null)] | all' 'true' "$POLICY"
+assert_jq "every tag defines degraded completion" '[.tags | to_entries[] | (.value.completion.degraded != null)] | all' 'true' "$POLICY"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

@@ -32,7 +32,10 @@ assert_contains_text() {
 }
 
 assert_eq "policy file resolves" "$REPO_ROOT/config/tag_policy.json" "$(resolve_tag_policy_file)"
+assert_eq "block-job schema file resolves" "$REPO_ROOT/config/block-job-schema.json" "$(resolve_block_job_schema_file)"
 assert_eq "result schema file resolves" "$REPO_ROOT/config/result-schema.json" "$(resolve_result_schema_file)"
+assert_eq "block-job schema version resolves" "1" "$(block_job_schema_version)"
+assert_eq "result schema version resolves" "1" "$(result_schema_version)"
 assert_eq "#ƒ label comes from policy" "explicit instruction" "$(policy_tag_label 'ƒ')"
 assert_eq "#∆ route comes from policy" "api-search" "$(policy_tag_route '∆')"
 assert_eq "#∑ full-file flag comes from policy" "true" "$(policy_tag_needs_full_file '∑')"
@@ -43,6 +46,7 @@ assert_eq "local-agent tools come from policy" "Read,Write,Bash" "$(policy_route
 assert_eq "hybrid enabled flag comes from policy" "false" "$(policy_route_enabled 'hybrid')"
 assert_contains_text "route capability section mentions forbidden web on local-agent" "web_search" "$(policy_route_capability_section 'local-agent')"
 assert_contains_text "tag section mentions #©" '#©' "$(policy_tag_section)"
+assert_contains_text "tag chars include #$" '$' "$(policy_tag_chars)"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

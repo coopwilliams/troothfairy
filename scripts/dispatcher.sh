@@ -28,10 +28,10 @@ TAG_S='#∑'   # alt-w  — evaluate with full file context
 TAG_C='#©'   # alt-g  — validate/check
 TAG_BASH='#$' # alt-4  — explicit instruction with shell access
 
-SCHEMA_VERSION=1
-
 source "${SCRIPT_DIR}/lib/config.sh" 2>/dev/null || true
 source "${SCRIPT_DIR}/lib/tag_policy.sh" 2>/dev/null || true
+
+BLOCK_JOB_SCHEMA_VERSION="$(block_job_schema_version)"
 
 # ---------------------------------------------------------------------------
 # Vault-scoped tk: run tk commands from inside the vault so tickets
@@ -195,6 +195,12 @@ OPEN_JOB_KEYS=$(
         ticket_body=$(vtk show "$ticket_id" 2>/dev/null || true)
         job_json=$(extract_json_payload "$ticket_body")
         [[ -n "$job_json" ]] || continue
+        actual_schema_version="$(printf '%s\n' "$job_json" | jq -r '.schema_version // "missing"' 2>/dev/null || printf 'missing\n')"
+        if [[ "$actual_schema_version" != "$BLOCK_JOB_SCHEMA_VERSION" ]]; then
+            vtk add-note "$ticket_id" "Unsupported block-job payload auto-closed: schema_version=${actual_schema_version}, expected=${BLOCK_JOB_SCHEMA_VERSION}" >/dev/null 2>&1 || true
+            vtk close "$ticket_id" >/dev/null 2>&1 || true
+            continue
+        fi
         file_path="$(printf '%s\n' "$job_json" | jq -r '.file_path // empty')"
         line_number="$(printf '%s\n' "$job_json" | jq -r '.line_number // empty')"
         tag_char="$(printf '%s\n' "$job_json" | jq -r '.tag_char // empty')"
@@ -236,7 +242,7 @@ while IFS= read -r result_line; do
 
     payload_file="${WORK_DIR}/job-${ticket_count}.json"
     jq -n \
-        --argjson schema_version "$SCHEMA_VERSION" \
+        --argjson schema_version "$BLOCK_JOB_SCHEMA_VERSION" \
         --arg file_path "$file_path" \
         --arg vault_rel "$vault_rel" \
         --arg file_basename "$filename" \

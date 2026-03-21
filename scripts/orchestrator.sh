@@ -24,6 +24,7 @@ EXCERPT_SKILL_FILE="${REPO_ROOT}/.claude/skills/excerpt-text/SKILL.md"
 
 source "${SCRIPT_DIR}/lib/config.sh" 2>/dev/null || true
 source "${SCRIPT_DIR}/lib/tag_policy.sh" 2>/dev/null || true
+source "${SCRIPT_DIR}/patch_engine.sh" 2>/dev/null || true
 STATUS_DIR="${STATUS_DIR:-$(get_config status_dir /tmp/troothfairy-status 2>/dev/null || echo /tmp/troothfairy-status)}"
 mkdir -p "$STATUS_DIR"
 rm -f "${STATUS_DIR}"/active-*
@@ -65,8 +66,9 @@ while IFS=' ' read -r dir_path dir_access; do
     DIRS_PROMPT_SECTION+="- ${dir_path} [${access_label}]"$'\n'
 done < <(get_dirs "$VAULT_DIR" 2>/dev/null || true)
 
+BLOCK_JOB_SCHEMA_VERSION="$(block_job_schema_version)"
 RESULT_SCHEMA_FILE="$(resolve_result_schema_file)"
-RESULT_SCHEMA_VERSION=$(jq -r '.schema_version' "$RESULT_SCHEMA_FILE")
+RESULT_SCHEMA_VERSION="$(result_schema_version)"
 RESULT_SCHEMA_TEXT=$(cat "$RESULT_SCHEMA_FILE")
 
 extract_json_payload() {
@@ -98,122 +100,6 @@ apply_model_override() {
 
 tag_preview() {
     printf '%s' "$1" | sed 's/^[[:space:]]*-*[[:space:]]*#[^[:space:]]* //'
-}
-
-infer_child_indent() {
-    local tagged_line="$1"
-    local block_content="$2"
-    local base_indent=""
-    local next_line=""
-
-    if [[ "$tagged_line" =~ ^([[:space:]]*) ]]; then
-        base_indent="${BASH_REMATCH[1]}"
-    fi
-
-    next_line=$(printf '%s\n' "$block_content" | awk 'NR > 1 && NF { print; exit }')
-    if [[ -n "$next_line" ]] && [[ "$next_line" =~ ^([[:space:]]*) ]]; then
-        local next_indent="${BASH_REMATCH[1]}"
-        if [[ ${#next_indent} -gt ${#base_indent} ]]; then
-            printf '%s\n' "${next_indent:${#base_indent}}"
-            return 0
-        fi
-    fi
-
-    if [[ "$base_indent" == *$'\t'* ]]; then
-        printf '\t\n'
-    else
-        printf '    \n'
-    fi
-}
-
-find_target_line() {
-    local file_path="$1"
-    local expected_line="$2"
-    local tagged_line="$3"
-
-    local current_line
-    current_line=$(sed -n "${expected_line}p" "$file_path" 2>/dev/null)
-    if [[ "$current_line" == "$tagged_line" ]]; then
-        printf '%s\n' "$expected_line"
-        return 0
-    fi
-
-    awk -v target="$tagged_line" '
-    $0 == target { print NR; exit }
-    ' "$file_path"
-}
-
-apply_result_to_file() {
-    local file_path="$1"
-    local job_file="$2"
-    local result_file="$3"
-    local expected_line="$4"
-
-    local tagged_line tag_char block_content completion_tag append_failure_marker
-    local target_line replaced_line indent_unit child_prefix
-    local tmp_file line_no inserted_count response_count
-
-    tagged_line=$(jq -r '.tagged_line' "$job_file")
-    tag_char=$(jq -r '.tag_char' "$job_file")
-    block_content=$(jq -r '.block_content' "$job_file")
-    completion_tag=$(jq -r '.completion_tag' "$result_file")
-    append_failure_marker=$(jq -r '.append_failure_marker' "$result_file")
-
-    target_line=$(find_target_line "$file_path" "$expected_line" "$tagged_line")
-    if [[ -z "$target_line" ]]; then
-        echo "could not locate tagged line in ${file_path}" >&2
-        return 1
-    fi
-
-    replaced_line=$(printf '%s\n' "$tagged_line" | perl -CSDA -e '
-        use utf8;
-        my ($tag_token, $completion_token) = @ARGV;
-        local $/;
-        my $text = <STDIN>;
-        $text =~ s/\Q$tag_token\E/$completion_token/;
-        print $text;
-    ' "#${tag_char}" "#${completion_tag}")
-    if [[ "$append_failure_marker" == "true" ]]; then
-        replaced_line=$(printf '%s\n' "$replaced_line" | perl -CSDA -e '
-            use utf8;
-            my ($completion_token) = @ARGV;
-            local $/;
-            my $text = <STDIN>;
-            $text =~ s/\Q$completion_token\E/$completion_token #¡/;
-            print $text;
-        ' "#${completion_tag}")
-    fi
-
-    if [[ "$tagged_line" =~ ^([[:space:]]*) ]]; then
-        child_prefix="${BASH_REMATCH[1]}"
-    else
-        child_prefix=""
-    fi
-    indent_unit=$(infer_child_indent "$tagged_line" "$block_content")
-    child_prefix="${child_prefix}${indent_unit}"
-
-    tmp_file=$(mktemp)
-    line_no=0
-    inserted_count=0
-
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        line_no=$((line_no + 1))
-        if [[ "$line_no" -eq "$target_line" ]]; then
-            printf '%s\n' "$replaced_line" >> "$tmp_file"
-            response_count=$(jq -r '.response_lines | length' "$result_file")
-            if [[ "$response_count" -gt 0 ]]; then
-                while IFS= read -r response_line; do
-                    printf '%s%s\n' "$child_prefix" "$response_line" >> "$tmp_file"
-                    inserted_count=$((inserted_count + 1))
-                done < <(jq -r '.response_lines[]' "$result_file")
-            fi
-        else
-            printf '%s\n' "$line" >> "$tmp_file"
-        fi
-    done < "$file_path"
-
-    mv "$tmp_file" "$file_path"
-    printf '%s\n' "$inserted_count"
 }
 
 record_history() {
@@ -312,14 +198,25 @@ while IFS= read -r ticket_id; do
     }
 
     job_json=$(extract_json_payload "$ticket_body")
-    if [[ -z "$job_json" ]] || ! printf '%s\n' "$job_json" | jq -e '.schema_version == 1' >/dev/null 2>&1; then
-        vtk add-note "$ticket_id" "Failed: unsupported or missing block-job payload"
+    if [[ -z "$job_json" ]]; then
+        vtk add-note "$ticket_id" "Failed: missing block-job payload"
         overall_exit=1
         continue
     fi
 
     job_file="${WORK_DIR}/${ticket_id}.job.json"
     printf '%s\n' "$job_json" > "$job_file"
+
+    actual_job_schema_version=$(jq -r '.schema_version // "missing"' "$job_file" 2>/dev/null || printf 'missing\n')
+    if ! validate_block_job_payload_file "$job_file" >/dev/null 2>&1; then
+        if [[ "$actual_job_schema_version" != "$BLOCK_JOB_SCHEMA_VERSION" ]]; then
+            vtk add-note "$ticket_id" "Failed: unsupported block-job schema version ${actual_job_schema_version} (expected ${BLOCK_JOB_SCHEMA_VERSION})"
+        else
+            vtk add-note "$ticket_id" "Failed: invalid block-job payload"
+        fi
+        overall_exit=1
+        continue
+    fi
 
     file_path=$(jq -r '.file_path' "$job_file")
     file_basename=$(jq -r '.file_basename' "$job_file")
@@ -409,19 +306,18 @@ while IFS= read -r ticket_id; do
                 printf '1 invalid_json no-json-object-returned' > "$status_file"
                 exit 0
             fi
-            if printf '%s\n' "$result_json" | jq -e '
-                .schema_version == 1 and
-                (.job_id | type == "string") and
-                (.tag | type == "string") and
-                (.outcome | type == "string") and
-                (.completion_tag | type == "string") and
-                (.append_failure_marker | type == "boolean") and
-                (.response_lines | type == "array")
-            ' >/dev/null 2>&1; then
-                printf '%s\n' "$result_json" > "$result_file"
+            printf '%s\n' "$result_json" > "$result_file"
+            actual_result_schema_version=$(jq -r '.schema_version // "missing"' "$result_file" 2>/dev/null || printf 'missing\n')
+            if validate_result_payload_file "$result_file" >/dev/null 2>&1 && jq -e --arg ticket_id "$ticket_id" --arg tag "$tag_char" '
+                .job_id == $ticket_id and .tag == $tag
+            ' "$result_file" >/dev/null 2>&1; then
                 printf '0' > "$status_file"
             else
-                printf '1 invalid_json schema-validation-failed' > "$status_file"
+                if [[ "$actual_result_schema_version" != "$RESULT_SCHEMA_VERSION" ]]; then
+                    printf '1 invalid_json unsupported-result-schema-version=%s expected=%s' "$actual_result_schema_version" "$RESULT_SCHEMA_VERSION" > "$status_file"
+                else
+                    printf '1 invalid_json schema-validation-failed' > "$status_file"
+                fi
             fi
         else
             exit_code=$?
@@ -512,7 +408,7 @@ if [[ -s "$SUCCESS_MANIFEST" ]]; then
         sort -n "$queue_file" > "$sorted_queue"
         while IFS=$'\t' read -r line_number ticket_id job_file result_file; do
             effective_line=$((line_number + offset))
-            inserted_count=$(apply_result_to_file "$file_path" "$job_file" "$result_file" "$effective_line")
+            inserted_count=$(patch_engine_apply_intent "$file_path" "$job_file" "$result_file" "$effective_line")
             apply_exit=$?
             if [[ "$apply_exit" -eq 0 ]]; then
                 offset=$((offset + inserted_count))

@@ -272,6 +272,7 @@ assert_contains "#ƒ plain instruction text captured" "plain instruction line" "
 # Test 12: structured payload includes route and line metadata
 # ---------------------------------------------------------------------------
 assert_contains "payload includes api-search route" '"route": "api-search"' "$ALL_CALLS"
+assert_contains "payload includes schema version" '"schema_version": 1' "$ALL_CALLS"
 assert_contains "payload includes local line metadata" '"line_number": 1' "$ALL_CALLS"
 assert_contains "payload includes block content field" '"block_content"' "$ALL_CALLS"
 

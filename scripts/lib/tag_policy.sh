@@ -2,24 +2,58 @@
 # tag_policy.sh — structured tag/route policy helpers
 
 TAG_POLICY_FILE_DEFAULT="config/tag_policy.json"
+BLOCK_JOB_SCHEMA_FILE_DEFAULT="config/block-job-schema.json"
 RESULT_SCHEMA_FILE_DEFAULT="config/result-schema.json"
 
 resolve_tag_policy_file() {
     local repo_root
+    local path="${TAG_POLICY_FILE:-$TAG_POLICY_FILE_DEFAULT}"
+    if [[ "$path" == /* ]]; then
+        printf '%s\n' "$path"
+        return 0
+    fi
     repo_root="$(resolve_repo_root)" || return 1
-    printf '%s/%s\n' "$repo_root" "${TAG_POLICY_FILE:-$TAG_POLICY_FILE_DEFAULT}"
+    printf '%s/%s\n' "$repo_root" "$path"
+}
+
+resolve_block_job_schema_file() {
+    local repo_root
+    local path="${BLOCK_JOB_SCHEMA_FILE:-$BLOCK_JOB_SCHEMA_FILE_DEFAULT}"
+    if [[ "$path" == /* ]]; then
+        printf '%s\n' "$path"
+        return 0
+    fi
+    repo_root="$(resolve_repo_root)" || return 1
+    printf '%s/%s\n' "$repo_root" "$path"
 }
 
 resolve_result_schema_file() {
     local repo_root
+    local path="${RESULT_SCHEMA_FILE:-$RESULT_SCHEMA_FILE_DEFAULT}"
+    if [[ "$path" == /* ]]; then
+        printf '%s\n' "$path"
+        return 0
+    fi
     repo_root="$(resolve_repo_root)" || return 1
-    printf '%s/%s\n' "$repo_root" "${RESULT_SCHEMA_FILE:-$RESULT_SCHEMA_FILE_DEFAULT}"
+    printf '%s/%s\n' "$repo_root" "$path"
 }
 
 policy_jq() {
     local policy_file
     policy_file="$(resolve_tag_policy_file)" || return 1
     jq -r "$@" "$policy_file"
+}
+
+block_job_schema_version() {
+    jq -r '.schema_version' "$(resolve_block_job_schema_file)"
+}
+
+result_schema_version() {
+    jq -r '.schema_version' "$(resolve_result_schema_file)"
+}
+
+policy_tag_chars() {
+    policy_jq '.tags | keys[]'
 }
 
 policy_tag_label() { policy_jq --arg tag "$1" '.tags[$tag].label'; }
@@ -62,4 +96,38 @@ policy_tag_section() {
 render_template() {
     local template_path="$1"
     perl -0pe 's/\{\{([A-Z0-9_]+)\}\}/exists $ENV{$1} ? $ENV{$1} : $&/ge' "$template_path"
+}
+
+validate_block_job_payload_file() {
+    local payload_file="$1"
+    local expected_version
+    expected_version="$(block_job_schema_version)"
+    jq -e --argjson expected_version "$expected_version" '
+        .schema_version == $expected_version and
+        (.file_path | type == "string") and
+        (.vault_rel | type == "string") and
+        (.file_basename | type == "string") and
+        (.line_number | type == "number") and
+        (.tag_char | type == "string") and
+        (.tag_label | type == "string") and
+        (.route | type == "string") and
+        (.needs_full_file | type == "boolean") and
+        (.tagged_line | type == "string") and
+        (.block_content | type == "string")
+    ' "$payload_file"
+}
+
+validate_result_payload_file() {
+    local payload_file="$1"
+    local expected_version
+    expected_version="$(result_schema_version)"
+    jq -e --argjson expected_version "$expected_version" '
+        .schema_version == $expected_version and
+        (.job_id | type == "string") and
+        (.tag | type == "string") and
+        (.outcome | type == "string") and
+        (.completion_tag | type == "string") and
+        (.append_failure_marker | type == "boolean") and
+        (.response_lines | type == "array")
+    ' "$payload_file"
 }
