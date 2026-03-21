@@ -59,7 +59,7 @@ if [[ -d "$STATUS_DIR" ]]; then
 fi
 
 if ! $DAEMON_RUNNING; then
-    echo "🪄"
+    echo "🪄● | color=red"
 elif $HAS_ACTIVE; then
     echo "🪄● | color=#00cc00"
 else
@@ -77,7 +77,7 @@ echo "---"
 if $DAEMON_RUNNING; then
     echo "Troothfairy: Running | color=green"
 else
-    echo "Troothfairy: Paused | color=gray"
+    echo "Troothfairy: Stopped | color=red"
 fi
 
 # ---------------------------------------------------------------------------

@@ -67,6 +67,14 @@ VAULT_DIR="${TMPDIR_ROOT}/vault"
 mkdir -p "$VAULT_DIR"
 FAKE_BIN="${TMPDIR_ROOT}/bin"
 mkdir -p "$FAKE_BIN"
+STATUS_DIR_TEST="${TMPDIR_ROOT}/status"
+mkdir -p "$STATUS_DIR_TEST"
+TK_LOG="${TMPDIR_ROOT}/tk.log"
+TK_LIST_FILE="${TMPDIR_ROOT}/ticket_list.txt"
+
+export STATUS_DIR="$STATUS_DIR_TEST"
+export TK_LOG
+export TK_LIST_FILE
 
 # Create a minimal .md file so the vault looks real
 cat > "${VAULT_DIR}/note.md" << 'EOF'
@@ -74,16 +82,39 @@ cat > "${VAULT_DIR}/note.md" << 'EOF'
 Just a placeholder so fswatch has a real directory to watch.
 EOF
 
+cat > "${FAKE_BIN}/tk" << 'EOF'
+#!/usr/bin/env bash
+printf '<<TK-CALL>> %s\n' "$*" >> "$TK_LOG"
+
+case "$1" in
+    list)
+        [[ -f "$TK_LIST_FILE" ]] && cat "$TK_LIST_FILE"
+        exit 0
+        ;;
+    close|add-note)
+        exit 0
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+EOF
+chmod +x "${FAKE_BIN}/tk"
+
+ORIGINAL_PATH="$PATH"
+export PATH="${FAKE_BIN}:${PATH}"
+
 cleanup() {
     # Kill any watcher we might have started
     if [[ -f "$PIDFILE" ]]; then
         local pid
-        pid=$(cat "$PIDFILE" 2>/dev/null || true)
+        pid=$(sed -n '1p' "$PIDFILE" 2>/dev/null || true)
         if [[ -n "$pid" ]]; then
             kill "$pid" 2>/dev/null || true
         fi
         rm -f "$PIDFILE"
     fi
+    export PATH="$ORIGINAL_PATH"
     rm -rf "$TMPDIR_ROOT"
 }
 trap cleanup EXIT
@@ -142,7 +173,7 @@ fi
 
 STARTED_PID=""
 if [[ -f "$PIDFILE" ]]; then
-    STARTED_PID=$(cat "$PIDFILE")
+    STARTED_PID=$(sed -n '1p' "$PIDFILE")
 fi
 
 if [[ -n "$STARTED_PID" ]] && is_running "$STARTED_PID"; then
@@ -150,6 +181,12 @@ if [[ -n "$STARTED_PID" ]] && is_running "$STARTED_PID"; then
 else
     fail "watcher process is not running after start (PID='$STARTED_PID')"
 fi
+
+PIDFILE_VAULT=""
+if [[ -f "$PIDFILE" ]]; then
+    PIDFILE_VAULT=$(sed -n '2p' "$PIDFILE")
+fi
+assert_eq "pidfile stores watched vault path" "$VAULT_DIR" "$PIDFILE_VAULT"
 
 assert_contains "start prints PID confirmation" "started" "$START_OUTPUT"
 
@@ -206,7 +243,7 @@ echo "--- Test: status (not running)"
 STATUS2_OUTPUT=$("$PATCHED_WATCH" status 2>&1)
 STATUS2_EXIT=$?
 
-assert_eq "status exits 0 when no pidfile" "0" "$STATUS2_EXIT"
+assert_eq "status exits non-zero when no pidfile" "1" "$STATUS2_EXIT"
 assert_contains "status reports not running" "not running" "$STATUS2_OUTPUT"
 
 # ---------------------------------------------------------------------------
@@ -278,6 +315,7 @@ chmod +x "$FAKE_DISPATCHER"
 ORIGINAL_PATH="$PATH"
 export PATH="${FAKE_BIN}:${PATH}"
 export FAKE_LOG
+: > "$FAKE_LOG"
 
 GROUP_START_OUTPUT=$("$PATCHED_WATCH" start "$VAULT_DIR" 2>&1)
 GROUP_START_EXIT=$?
@@ -294,7 +332,35 @@ assert_eq "group-regression stop exits 0" "0" "$STOP_GROUP_EXIT"
 assert_contains "group-regression stop prints stopped confirmation" "stopped" "$STOP_GROUP_OUTPUT"
 assert_eq "dispatcher count stops increasing after stop" "$dispatch_count_before_stop" "$dispatch_count_after_stop"
 
-export PATH="$ORIGINAL_PATH"
+echo "--- Test: stop clears active jobs and closes open tickets"
+
+: > "$TK_LOG"
+printf '%s\n' "ticket-stop-1" > "$TK_LIST_FILE"
+printf '%s\n' "ticket-stop-2" >> "$TK_LIST_FILE"
+mkdir -p "$STATUS_DIR"
+printf '%s\n' "active job" > "${STATUS_DIR}/active-ticket-stop-1"
+printf '%s\n' "active job" > "${STATUS_DIR}/active-ticket-stop-2"
+
+CLEAN_START_OUTPUT=$("$PATCHED_WATCH" start "$VAULT_DIR" 2>&1)
+CLEAN_START_EXIT=$?
+assert_eq "cleanup suite start exits 0" "0" "$CLEAN_START_EXIT"
+
+CLEAN_STOP_OUTPUT=$("$PATCHED_WATCH" stop 2>&1)
+CLEAN_STOP_EXIT=$?
+assert_eq "cleanup suite stop exits 0" "0" "$CLEAN_STOP_EXIT"
+assert_contains "cleanup suite stop prints pidfile removed" "pidfile removed" "$CLEAN_STOP_OUTPUT"
+
+if compgen -G "${STATUS_DIR}/active-*" > /dev/null; then
+    fail "active status files still exist after stop cleanup"
+else
+    pass "active status files cleared after stop cleanup"
+fi
+
+TK_CALLS=$(cat "$TK_LOG" 2>/dev/null || true)
+assert_contains "stop queries open troothfairy tickets" "list --status=open --tags=troothfairy" "$TK_CALLS"
+assert_contains "stop adds note to first ticket" "add-note ticket-stop-1 Auto-closed: watcher stopped before the job completed" "$TK_CALLS"
+assert_contains "stop closes first ticket" "close ticket-stop-1" "$TK_CALLS"
+assert_contains "stop closes second ticket" "close ticket-stop-2" "$TK_CALLS"
 
 # ---------------------------------------------------------------------------
 # Results

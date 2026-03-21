@@ -65,9 +65,9 @@ After processing, user tags are replaced with completion tags:
 The 🪄 icon in your menu bar shows:
 - **White dot**: daemon running, idle
 - **Green dot**: subagents actively processing
-- **No dot**: daemon paused
+- **Red dot**: daemon stopped
 
-Click it to pause/start, view active and recent jobs, or open the vault in Obsidian.
+Click it to stop/start, view active and recent jobs, or open the vault in Obsidian. Stopping the watcher also clears active job state and auto-closes any still-open Troothfairy tickets.
 
 ## Configuration
 
