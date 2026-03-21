@@ -65,6 +65,8 @@ assert_contains() {
 TMPDIR_ROOT=$(mktemp -d)
 VAULT_DIR="${TMPDIR_ROOT}/vault"
 mkdir -p "$VAULT_DIR"
+FAKE_BIN="${TMPDIR_ROOT}/bin"
+mkdir -p "$FAKE_BIN"
 
 # Create a minimal .md file so the vault looks real
 cat > "${VAULT_DIR}/note.md" << 'EOF'
@@ -250,6 +252,49 @@ USAGE_EXIT=$("$PATCHED_WATCH" 2>/dev/null; echo $?) || true
 
 assert_eq "no-args exits non-zero" "1" "$USAGE_EXIT"
 assert_contains "no-args prints usage" "Usage" "$USAGE_OUTPUT"
+
+# ---------------------------------------------------------------------------
+# Test 9: stop kills the entire watcher pipeline, not just the parent shell
+# ---------------------------------------------------------------------------
+echo "--- Test: stop kills watcher process group"
+
+FAKE_LOG="${TMPDIR_ROOT}/dispatcher.log"
+cat > "${FAKE_BIN}/fswatch" << 'EOF'
+#!/usr/bin/env bash
+while true; do
+    printf '%s\n' "event"
+    sleep 0.1
+done
+EOF
+chmod +x "${FAKE_BIN}/fswatch"
+
+cat > "$FAKE_DISPATCHER" << 'DISPSTUB'
+#!/usr/bin/env bash
+echo "dispatch" >> "$FAKE_LOG"
+exit 0
+DISPSTUB
+chmod +x "$FAKE_DISPATCHER"
+
+ORIGINAL_PATH="$PATH"
+export PATH="${FAKE_BIN}:${PATH}"
+export FAKE_LOG
+
+GROUP_START_OUTPUT=$("$PATCHED_WATCH" start "$VAULT_DIR" 2>&1)
+GROUP_START_EXIT=$?
+assert_eq "group-regression start exits 0" "0" "$GROUP_START_EXIT"
+
+sleep 0.4
+dispatch_count_before_stop=$(wc -l < "$FAKE_LOG" 2>/dev/null || echo 0)
+STOP_GROUP_OUTPUT=$("$PATCHED_WATCH" stop 2>&1)
+STOP_GROUP_EXIT=$?
+sleep 0.4
+dispatch_count_after_stop=$(wc -l < "$FAKE_LOG" 2>/dev/null || echo 0)
+
+assert_eq "group-regression stop exits 0" "0" "$STOP_GROUP_EXIT"
+assert_contains "group-regression stop prints stopped confirmation" "stopped" "$STOP_GROUP_OUTPUT"
+assert_eq "dispatcher count stops increasing after stop" "$dispatch_count_before_stop" "$dispatch_count_after_stop"
+
+export PATH="$ORIGINAL_PATH"
 
 # ---------------------------------------------------------------------------
 # Results

@@ -18,7 +18,7 @@ set -uo pipefail
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DISPATCHER="${SCRIPT_DIR}/dispatcher.sh"
-PIDFILE="/tmp/troothfairy-watch.pid"
+PIDFILE="${PIDFILE:-/tmp/troothfairy-watch.pid}"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -49,6 +49,12 @@ check_fswatch() {
 is_running() {
     local pid="$1"
     kill -0 "$pid" 2>/dev/null
+}
+
+stop_process_group() {
+    local pid="$1"
+
+    kill -TERM -- "-${pid}" 2>/dev/null || kill "$pid" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -91,20 +97,28 @@ cmd_start() {
     # Note: fswatch's include/exclude ordering is: exclusions are applied first,
     # then inclusions override them. We exclude everything with -e '.*' and then
     # include \.md$ to get only Markdown files.
-    (
-        fswatch \
-            --latency 0.1 \
-            --one-per-batch \
-            -r \
-            -e '.*' \
-            -i '\.md$' \
-            -e '\.obsidian' \
-            -e '\.tickets' \
-            "$vault_dir" \
-            | while read -r _event; do
-                "$DISPATCHER" "$vault_dir" </dev/null
-            done
-    ) </dev/null >/dev/null 2>&1 &
+    perl -e '
+        use strict;
+        use warnings;
+        setpgrp(0, 0) or die "setpgrp failed: $!";
+        exec @ARGV or die "exec failed: $!";
+    ' \
+        bash -c '
+            fswatch \
+                --latency 0.1 \
+                --one-per-batch \
+                -r \
+                -e '\''.*'\'' \
+                -i '\''\.md$'\'' \
+                -e '\''\.obsidian'\'' \
+                -e '\''\.tickets'\'' \
+                "$1" \
+                | while read -r _event; do
+                    "$0" "$1" </dev/null
+                done
+        ' \
+        "$DISPATCHER" \
+        "$vault_dir" </dev/null >/dev/null 2>&1 &
 
     local watch_pid=$!
     disown "$watch_pid" 2>/dev/null || true
@@ -125,7 +139,7 @@ cmd_stop() {
     pid=$(cat "$PIDFILE")
 
     if is_running "$pid"; then
-        kill "$pid"
+        stop_process_group "$pid"
         # Give the process a moment to die, then confirm
         local retries=5
         while is_running "$pid" && [[ $retries -gt 0 ]]; do
@@ -134,7 +148,7 @@ cmd_stop() {
         done
         if is_running "$pid"; then
             echo -e "${YELLOW}watch${NC}: PID ${pid} did not stop cleanly; sending SIGKILL." >&2
-            kill -9 "$pid" 2>/dev/null || true
+            kill -KILL -- "-${pid}" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
         fi
         echo -e "${GREEN}watch${NC}: stopped (PID ${pid})."
     else
