@@ -415,6 +415,8 @@ assert_not_contains "local-agent excludes web tools" "WebSearch,WebFetch" "$CLAU
 assert_contains "configured directories included for local-agent" "Configured directories" "$CLAUDE_LOCAL"
 assert_contains "excerpt dir resolves under vault path" "${VAULT_DIR}/_EXCERPTS [write-only]" "$CLAUDE_LOCAL"
 assert_not_contains "excerpt dir is not repo-root relative" "${REPO_ROOT}/./_EXCERPTS" "$CLAUDE_LOCAL"
+assert_contains "excerpt skill requires single-hit split pipeline" "Even if the search produces only one matching section total, you must still write exactly one split chunk" "$CLAUDE_LOCAL"
+assert_contains "excerpt skill forbids ad hoc excerpt file creation" "Do NOT create ad hoc excerpt files yourself" "$CLAUDE_LOCAL"
 assert_contains "local-agent patch applied" "#Ω$ Local shell-assisted response." "$LOCAL_FILE"
 
 echo ""

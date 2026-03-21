@@ -36,6 +36,7 @@ The steps:
 	- Content lines below it
 	- `--` separating sections within the same file
 	- Blank line then new filepath when the file changes
+	- Even if the search produces only one matching section total, you must still write exactly one split chunk into the splits folder and continue with steps 5 and 6. Do not short-circuit the pipeline for the single-hit case.
 	```bash
 	mkdir -p /tmp/my_session_id_splits && awk -v search_string="my_search_term" -v context_lines=15 '
 function flush(    out, pg) {
@@ -72,6 +73,7 @@ END { flush() }
 ' /tmp/my_session_id
 	```
 5. Evaluate chunks in parallel using the Anthropic API. You do NOT read any chunks yourself. Instead, run a bash script that sends curl requests to the Messages API in parallel. Each call sends one chunk and the inclusion criteria to Haiku, which responds with `yes - descriptive-kebab-filename` or `no`.
+	- This step is required even when there is only one split chunk. In the single-hit case, run the same evaluation pipeline with one input chunk.
 	- Source the `.env` file in the project root to get `ANTHROPIC_API_KEY`.
 	- Set `CRITERIA` to a concise version of the user's inclusion criteria.
 	- Set `SID` to your session id, `SPLITS` to `/tmp/${SID}_splits`, `RESULTS` to `/tmp/${SID}_results`.
@@ -126,6 +128,7 @@ END { flush() }
 	  ```
 	- Excerpt filenames cannot start with a dot or contain any of these characters: `[]#^|`
 	- Do NOT edit chunk files — move them verbatim.
+	- Do NOT create ad hoc excerpt files yourself, even if there is only one matching chunk. The only allowed final-file creation path is moving a previously generated split chunk from `SPLITS` into `EXCERPT_DIR`.
 	- Verify the splits folder is empty when done.
 7. The job is complete when the splits folder is empty. Report which files were saved to EXCERPT_DIR.
 
