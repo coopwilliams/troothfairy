@@ -17,6 +17,8 @@ fswatch → watch.sh → dispatcher.sh → orchestrator.sh → claude -p
 - `scripts/watch.sh` — fswatch daemon (start/stop/status)
 - `scripts/dispatcher.sh` — scans vault for open tags, creates one `tk` ticket per tagged block, and deduplicates/reconciles stale open jobs
 - `scripts/orchestrator.sh` — reads block-job tickets, routes them, requests structured JSON results, and applies deterministic file patches
+- `scripts/excerpt_split.sh` — deterministic splitter for excerpt-search results, including file-type formatting hooks
+- `scripts/excerpt_format.sh` — deterministic excerpt formatter applied during splitting
 - `config/tag_policy.json` — single source of truth for tag semantics, routes, tools, models, and completion-tag behavior
 - `config/result-schema.json` — structured result contract returned by generation backends
 - `scripts/prompts/system.tmpl.md` — system prompt template rendered from structured policy data

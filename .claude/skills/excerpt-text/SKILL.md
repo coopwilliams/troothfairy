@@ -31,49 +31,17 @@ The steps:
 			    printf \"Chunks   : $CHUNKS\nInput tok: $IN_TOK  → %.6f USD (haiku)\nOutput tok: $OUT_TOK  → %.6f USD (haiku)\nTotal est: %.6f USD\n\", \
 			      in_cost, out_cost, in_cost + out_cost; }"
 	  ```
-4. Split the temp file into a folder of chunks. With `--heading`, the format is:
-	- Filepath on its own line (absolute path starting with `/`)
-	- Content lines below it
-	- `--` separating sections within the same file
-	- Blank line then new filepath when the file changes
+4. Split the temp file into a folder of chunks using the checked-in deterministic helper script. This is the only allowed split path.
+	- The helper script converts `rga --heading` output into numbered chunk files with frontmatter.
+	- It also applies deterministic file-type formatting rules to chunk bodies before any agent evaluation.
 	- Even if the search produces only one matching section total, you must still write exactly one split chunk into the splits folder and continue with steps 5 and 6. Do not short-circuit the pipeline for the single-hit case.
 	```bash
-	mkdir -p /tmp/my_session_id_splits && awk -v search_string="my_search_term" -v context_lines=15 '
-function flush(    out, pg) {
-    gsub(/^\n+/, "", buf)
-    gsub(/\n+$/, "", buf)
-    if (buf != "") {
-        n++
-        out = "/tmp/my_session_id_splits/" sprintf("%04d", n)
-        printf "---\nagent-added: true\nfilepath: \"%s\"\nsearch_string: \"%s\"\ncontext_lines: %s\n", fname, search_string, context_lines > out
-        if (page_start > 0) {
-            printf "page_start: %d\npage_end: %d\n", page_start, page_end > out
-        }
-        printf "---\n\n%s\n", buf > out
-        close(out)
-        buf = ""
-        page_start = 0
-        page_end = 0
-    }
-}
-/^--$/ { flush(); next }
-/^\// { flush(); fname = $0; next }
-/^$/ && buf == "" { next }
-{
-    line = $0
-    if (match(line, /^Page [0-9]+: ?/)) {
-        pg = int(substr(line, 6))
-        if (page_start == 0 || pg < page_start) page_start = pg
-        if (pg > page_end) page_end = pg
-        line = substr(line, RSTART + RLENGTH)
-    }
-    buf = buf line "\n"
-}
-END { flush() }
-' /tmp/my_session_id
+	SPLITS="/tmp/my_session_id_splits"
+	/path/to/orb/scripts/excerpt_split.sh /tmp/my_session_id "$SPLITS" "my_search_term" 15
 	```
 5. Evaluate chunks in parallel using the Anthropic API. You do NOT read any chunks yourself. Instead, run a bash script that sends curl requests to the Messages API in parallel. Each call sends one chunk and the inclusion criteria to Haiku, which responds with `yes - descriptive-kebab-filename` or `no`.
 	- This step is required even when there is only one split chunk. In the single-hit case, run the same evaluation pipeline with one input chunk.
+	- Chunks may already contain deterministic formatting applied by the splitter. Do not try to rewrite or "clean up" formatting yourself.
 	- Source the `.env` file in the project root to get `ANTHROPIC_API_KEY`.
 	- Set `CRITERIA` to a concise version of the user's inclusion criteria.
 	- Set `SID` to your session id, `SPLITS` to `/tmp/${SID}_splits`, `RESULTS` to `/tmp/${SID}_results`.
