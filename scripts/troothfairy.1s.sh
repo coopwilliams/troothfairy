@@ -22,13 +22,21 @@ source "${SCRIPT_DIR}/lib/config.sh"
 # ---------------------------------------------------------------------------
 STATUS_DIR="$(get_config status_dir /tmp/troothfairy-status)"
 MAX_RECENT="$(get_config max_recent_jobs 5)"
-VAULT_PATH="$(resolve_vault_path)"
 WATCH_SH="${SCRIPT_DIR}/watch.sh"
 
-# ---------------------------------------------------------------------------
-# Derive vault name for Obsidian URL from the vault directory basename
-# ---------------------------------------------------------------------------
-VAULT_NAME="$(basename "$VAULT_PATH")"
+VAULT_PATHS=()
+while IFS= read -r vault_path; do
+    [[ -n "$vault_path" ]] || continue
+    VAULT_PATHS+=("$vault_path")
+done < <(resolve_vault_paths 2>/dev/null || true)
+
+if [[ ${#VAULT_PATHS[@]} -eq 0 ]]; then
+    fallback_vault="$(resolve_vault_path 2>/dev/null || true)"
+    [[ -n "$fallback_vault" ]] && VAULT_PATHS+=("$fallback_vault")
+fi
+
+DEFAULT_VAULT_PATH="${VAULT_PATHS[0]}"
+DEFAULT_VAULT_NAME="$(basename "$DEFAULT_VAULT_PATH")"
 
 # ---------------------------------------------------------------------------
 # Determine daemon status
@@ -86,7 +94,7 @@ fi
 if $DAEMON_RUNNING; then
     echo "Pause | bash=${WATCH_SH} param1=stop terminal=false refresh=true"
 else
-    echo "Start | bash=${WATCH_SH} param1=start param2=${VAULT_PATH} terminal=false refresh=true"
+    echo "Start | bash=${WATCH_SH} param1=start terminal=false refresh=true"
 fi
 
 echo "---"
@@ -102,11 +110,19 @@ if [[ -d "$STATUS_DIR" ]]; then
     if [[ ${#active_files[@]} -gt 0 && -f "${active_files[0]}" ]]; then
         for f in "${active_files[@]}"; do
             [[ -f "$f" ]] || continue
-            while IFS=$'\t' read -r desc_text obs_path; do
+            while IFS=$'\t' read -r desc_text vault_name obs_path; do
                 [[ -z "$desc_text" ]] && continue
+                if [[ -z "$obs_path" && -n "$vault_name" ]]; then
+                    obs_path="$vault_name"
+                    vault_name="$DEFAULT_VAULT_NAME"
+                fi
+                if [[ -z "$vault_name" ]]; then
+                    vault_name="$DEFAULT_VAULT_NAME"
+                fi
                 if [[ -n "$obs_path" ]]; then
+                    encoded_vault=$(printf '%s' "$vault_name" | sed 's/ /%20/g')
                     encoded_path=$(printf '%s' "$obs_path" | sed 's/ /%20/g')
-                    echo "✎ ${desc_text} | color=green size=12 font=Menlo bash=/usr/bin/open param1=obsidian://open?vault=${VAULT_NAME}&file=${encoded_path} terminal=false"
+                    echo "✎ ${desc_text} | color=green size=12 font=Menlo bash=/usr/bin/open param1=obsidian://open?vault=${encoded_vault}&file=${encoded_path} terminal=false"
                 else
                     echo "✎ ${desc_text} | color=green size=12 font=Menlo"
                 fi
@@ -145,10 +161,17 @@ if [[ -f "$HISTORY_LOG" ]]; then
 
             # Split desc from vault path on tab
             desc_text="${desc_with_path%%$'\t'*}"
-            obs_path="${desc_with_path#*$'\t'}"
-            # If no tab was found, obs_path equals desc_text
-            if [[ "$obs_path" == "$desc_text" ]]; then
+            remainder="${desc_with_path#*$'\t'}"
+            if [[ "$remainder" == "$desc_with_path" ]]; then
+                vault_name="$DEFAULT_VAULT_NAME"
                 obs_path=""
+            else
+                vault_name="${remainder%%$'\t'*}"
+                obs_path="${remainder#*$'\t'}"
+                if [[ "$obs_path" == "$vault_name" ]]; then
+                    obs_path="$vault_name"
+                    vault_name="$DEFAULT_VAULT_NAME"
+                fi
             fi
 
             # Format the timestamp for display
@@ -158,8 +181,9 @@ if [[ -f "$HISTORY_LOG" ]]; then
             # Build click action if we have a path
             click=""
             if [[ -n "$obs_path" ]]; then
+                encoded_vault=$(printf '%s' "$vault_name" | sed 's/ /%20/g')
                 encoded_path=$(printf '%s' "$obs_path" | sed 's/ /%20/g')
-                click=" bash=/usr/bin/open param1=obsidian://open?vault=${VAULT_NAME}&file=${encoded_path} terminal=false"
+                click=" bash=/usr/bin/open param1=obsidian://open?vault=${encoded_vault}&file=${encoded_path} terminal=false"
             fi
 
             if [[ "$status_char" == "✓" ]]; then
@@ -180,4 +204,14 @@ echo "---"
 # ---------------------------------------------------------------------------
 # Open in Obsidian
 # ---------------------------------------------------------------------------
-echo "Open in Obsidian | bash=/usr/bin/open param1=obsidian://open?vault=${VAULT_NAME} terminal=false"
+if [[ ${#VAULT_PATHS[@]} -le 1 ]]; then
+    encoded_vault=$(printf '%s' "$DEFAULT_VAULT_NAME" | sed 's/ /%20/g')
+    echo "Open in Obsidian | bash=/usr/bin/open param1=obsidian://open?vault=${encoded_vault} terminal=false"
+else
+    echo "Open in Obsidian"
+    for vault_path in "${VAULT_PATHS[@]}"; do
+        vault_name="$(basename "$vault_path")"
+        encoded_vault=$(printf '%s' "$vault_name" | sed 's/ /%20/g')
+        echo "${vault_name} | bash=/usr/bin/open param1=obsidian://open?vault=${encoded_vault} terminal=false"
+    done
+fi

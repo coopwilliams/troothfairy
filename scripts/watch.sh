@@ -57,13 +57,15 @@ die() {
 
 PIDFILE_PID=""
 PIDFILE_VAULT=""
+PIDFILE_VAULTS=()
 
 read_pidfile() {
     PIDFILE_PID=""
     PIDFILE_VAULT=""
+    PIDFILE_VAULTS=()
     [[ -f "$PIDFILE" ]] || return 1
 
-    local pid_line vault_line
+    local pid_line vault_line extra_vault
     pid_line=$(sed -n '1p' "$PIDFILE" 2>/dev/null || true)
     vault_line=$(sed -n '2p' "$PIDFILE" 2>/dev/null || true)
 
@@ -75,22 +77,36 @@ read_pidfile() {
         PIDFILE_VAULT="$vault_line"
     fi
 
+    if [[ -n "$PIDFILE_VAULT" ]]; then
+        PIDFILE_VAULTS+=("$PIDFILE_VAULT")
+    fi
+    while IFS= read -r extra_vault; do
+        [[ -n "$extra_vault" ]] || continue
+        PIDFILE_VAULTS+=("$extra_vault")
+    done < <(sed -n '3,$p' "$PIDFILE" 2>/dev/null || true)
+
     [[ -n "$PIDFILE_PID" ]]
 }
 
 write_pidfile() {
     local pid="$1"
-    local vault_dir="$2"
-    printf '%s\n%s\n' "$pid" "$vault_dir" > "$PIDFILE"
+    shift
+    {
+        printf '%s\n' "$pid"
+        while [[ $# -gt 0 ]]; do
+            printf '%s\n' "$1"
+            shift
+        done
+    } > "$PIDFILE"
 }
 
-resolve_stop_vault_dir() {
-    if [[ -n "$PIDFILE_VAULT" ]]; then
-        printf '%s\n' "$PIDFILE_VAULT"
+resolve_stop_vault_dirs() {
+    if [[ ${#PIDFILE_VAULTS[@]} -gt 0 ]]; then
+        printf '%s\n' "${PIDFILE_VAULTS[@]}"
         return 0
     fi
 
-    resolve_vault_path 2>/dev/null || true
+    resolve_vault_paths 2>/dev/null || true
 }
 
 clear_status_state() {
@@ -145,15 +161,29 @@ stop_process_group() {
 }
 
 # ---------------------------------------------------------------------------
-# cmd_start [vault_dir]
+# cmd_start [vault_dir ...]
 # ---------------------------------------------------------------------------
 cmd_start() {
     check_fswatch
 
-    local vault_dir="${1:-./orb-vault}"
-    # Resolve to an absolute path so the pidfile record is unambiguous
-    vault_dir="$(cd "$vault_dir" 2>/dev/null && pwd)" \
-        || die "vault directory not found: ${1:-./orb-vault}"
+    local vault_dirs=()
+    local requested_vault resolved_vault
+    if [[ $# -gt 0 ]]; then
+        for requested_vault in "$@"; do
+            resolved_vault="$(cd "$requested_vault" 2>/dev/null && pwd)" \
+                || die "vault directory not found: ${requested_vault}"
+            vault_dirs+=("$resolved_vault")
+        done
+    else
+        while IFS= read -r resolved_vault; do
+            [[ -n "$resolved_vault" ]] || continue
+            vault_dirs+=("$resolved_vault")
+        done < <(resolve_vault_paths 2>/dev/null || true)
+    fi
+
+    if [[ ${#vault_dirs[@]} -eq 0 ]]; then
+        die "no vault directories configured. Set vault_path or vaults in config.yaml, or pass vault directories explicitly."
+    fi
 
     if [[ ! -f "$DISPATCHER" ]]; then
         die "dispatcher not found: $DISPATCHER"
@@ -176,7 +206,6 @@ cmd_start() {
     # Launch fswatch in the background.
     #
     # Flags:
-    #   --one-per-batch   emit one event per batch (debounces rapid saves)
     #   -r                recursive
     #   -e '\.obsidian'   exclude .obsidian directory
     #   -i '\.md$'        include only .md files  (fswatch -e '' first to
@@ -192,38 +221,56 @@ cmd_start() {
         exec @ARGV or die "exec failed: $!";
     ' \
         bash -c '
-            "$2" \
+            dispatcher="$1"
+            fswatch_bin="$2"
+            shift 2
+            "$fswatch_bin" \
                 --latency 0.1 \
-                --one-per-batch \
                 -r \
                 -e '\''.*'\'' \
                 -i '\''\.md$'\'' \
                 -e '\''\.obsidian'\'' \
                 -e '\''\.tickets'\'' \
-                "$1" \
-                | while read -r _event; do
-                    "$0" "$1" </dev/null
+                "$@" \
+                | while IFS= read -r event_path; do
+                    dispatch_vault=""
+                    for vault_dir in "$@"; do
+                        case "$event_path" in
+                            "$vault_dir"|"$vault_dir"/*)
+                                dispatch_vault="$vault_dir"
+                                break
+                                ;;
+                        esac
+                    done
+                    if [[ -n "$dispatch_vault" ]]; then
+                        "$dispatcher" "$dispatch_vault" </dev/null
+                    fi
                 done
         ' \
+        _ \
         "$DISPATCHER" \
-        "$vault_dir" \
-        "$FSWATCH_BIN" </dev/null >/dev/null 2>&1 &
+        "$FSWATCH_BIN" \
+        "${vault_dirs[@]}" </dev/null >/dev/null 2>&1 &
 
     local watch_pid=$!
     disown "$watch_pid" 2>/dev/null || true
-    write_pidfile "$watch_pid" "$vault_dir"
-    echo -e "${GREEN}watch${NC}: started (PID ${watch_pid}), monitoring ${vault_dir}"
+    write_pidfile "$watch_pid" "${vault_dirs[@]}"
+    echo -e "${GREEN}watch${NC}: started (PID ${watch_pid}), monitoring ${#vault_dirs[@]} vault(s)."
 }
 
 # ---------------------------------------------------------------------------
 # cmd_stop
 # ---------------------------------------------------------------------------
 cmd_stop() {
-    local pid="" vault_dir="" had_pidfile=false
+    local pid="" had_pidfile=false vault_dir
+    local vault_dirs_to_close=()
     if read_pidfile; then
         had_pidfile=true
         pid="$PIDFILE_PID"
-        vault_dir="$(resolve_stop_vault_dir)"
+        while IFS= read -r vault_dir; do
+            [[ -n "$vault_dir" ]] || continue
+            vault_dirs_to_close+=("$vault_dir")
+        done < <(resolve_stop_vault_dirs)
     fi
 
     if [[ -n "$pid" ]] && is_running "$pid"; then
@@ -248,7 +295,11 @@ cmd_stop() {
     fi
 
     clear_status_state
-    close_open_tickets "$vault_dir"
+    if [[ ${#vault_dirs_to_close[@]} -gt 0 ]]; then
+        for vault_dir in "${vault_dirs_to_close[@]}"; do
+            close_open_tickets "$vault_dir"
+        done
+    fi
     rm -f "$PIDFILE"
     echo "watch: pidfile removed."
 }
@@ -278,9 +329,9 @@ cmd_status() {
 # Dispatch
 # ---------------------------------------------------------------------------
 usage() {
-    echo "Usage: $(basename "$0") {start [vault_dir] | stop | status}"
+    echo "Usage: $(basename "$0") {start [vault_dir ...] | stop | status}"
     echo ""
-    echo "  start [vault_dir]   Start the fswatch daemon (default vault: ./orb-vault)"
+    echo "  start [vault_dir ...]   Start the fswatch daemon (default: configured vault_path/vaults)"
     echo "  stop                Stop the fswatch daemon"
     echo "  status              Check whether the daemon is running"
     exit 1
@@ -293,7 +344,7 @@ fi
 case "$1" in
     start)
         shift
-        cmd_start "${1:-}"
+        cmd_start "$@"
         ;;
     stop)
         cmd_stop

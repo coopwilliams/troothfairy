@@ -74,10 +74,15 @@ Click it to stop/start, view active and recent jobs, or open the vault in Obsidi
 Edit `config.yaml` in the repo root:
 
 ```yaml
-vault_path: ./orb-vault          # Path to your Obsidian vault
+vault_path: ./orb-vault          # Backward-compatible single-vault setting
+# vaults:                        # Optional multi-vault watcher config
+#   - ./orb-vault
+#   - /Users/you/Documents/WorkVault
 max_recent_jobs: 5               # Recent jobs shown in menu bar
 status_dir: /tmp/troothfairy-status
 ```
+
+If `vaults:` is present, Troothfairy watches every listed vault and the menu bar labels active/recent jobs with the vault they belong to. If `vaults:` is omitted, `vault_path` continues to work as before.
 
 `dirs:` entries are interpreted as follows:
 - most relative paths resolve from the repo root
@@ -106,7 +111,9 @@ Control which domains the agent links to:
 
 ```bash
 # Start/stop the file watcher daemon
+./scripts/watch.sh start
 ./scripts/watch.sh start ./orb-vault
+./scripts/watch.sh start ./vault-a ./vault-b
 ./scripts/watch.sh stop
 ./scripts/watch.sh status
 

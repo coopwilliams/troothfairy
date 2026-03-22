@@ -334,6 +334,7 @@ TK_ALL=$(cat "$TK_LOG")
 CLAUDE_ALL=$(cat "$CLAUDE_LOG")
 FILE_A=$(cat "${VAULT_DIR}/file_a.md")
 FILE_B=$(cat "${VAULT_DIR}/file_b.md")
+HISTORY_LOG_CONTENT=$(cat "${STATUS_DIR}/history.log")
 
 assert_contains "tk list called with --status=open" "--status=open" "$TK_ALL"
 assert_contains "tk show called for ticket-a" "show ticket-a" "$TK_ALL"
@@ -355,6 +356,8 @@ assert_contains "line 1 response inserted" "#Ω∆ Added context for the transfo
 assert_contains "line 3 fact-check became #™" "#™ The speed of light is approximately 3e8 m/s." "$FILE_A"
 assert_not_contains "no extra response inserted for no-op success" "#Ω©" "$FILE_A"
 assert_contains "full-context file patched" "#Ω∑ Uses full-file context correctly." "$FILE_B"
+assert_contains "history records vault name for menu display" "[vault]" "$HISTORY_LOG_CONTENT"
+assert_contains "history keeps vault name as a separate field" $'\tvault\tfile_a' "$HISTORY_LOG_CONTENT"
 
 echo ""
 

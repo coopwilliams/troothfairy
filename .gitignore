@@ -6,3 +6,4 @@ SOURCING-WHITELIST.md
 sourcing/tags/
 .env
 /_EXCERPTS
+config.yaml

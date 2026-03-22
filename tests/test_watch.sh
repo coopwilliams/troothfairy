@@ -64,7 +64,9 @@ assert_contains() {
 # ---------------------------------------------------------------------------
 TMPDIR_ROOT=$(mktemp -d)
 VAULT_DIR="${TMPDIR_ROOT}/vault"
+VAULT_DIR_TWO="${TMPDIR_ROOT}/vault-two"
 mkdir -p "$VAULT_DIR"
+mkdir -p "$VAULT_DIR_TWO"
 FAKE_BIN="${TMPDIR_ROOT}/bin"
 mkdir -p "$FAKE_BIN"
 STATUS_DIR_TEST="${TMPDIR_ROOT}/status"
@@ -80,6 +82,11 @@ export TK_LIST_FILE
 cat > "${VAULT_DIR}/note.md" << 'EOF'
 # Test note
 Just a placeholder so fswatch has a real directory to watch.
+EOF
+
+cat > "${VAULT_DIR_TWO}/note.md" << 'EOF'
+# Test note two
+Just a placeholder so fswatch has a second real directory to watch.
 EOF
 
 cat > "${FAKE_BIN}/tk" << 'EOF'
@@ -361,6 +368,24 @@ assert_contains "stop queries open troothfairy tickets" "list --status=open --ta
 assert_contains "stop adds note to first ticket" "add-note ticket-stop-1 Auto-closed: watcher stopped before the job completed" "$TK_CALLS"
 assert_contains "stop closes first ticket" "close ticket-stop-1" "$TK_CALLS"
 assert_contains "stop closes second ticket" "close ticket-stop-2" "$TK_CALLS"
+
+echo "--- Test: start with multiple vaults"
+
+: > "$TK_LOG"
+MULTI_START_OUTPUT=$("$PATCHED_WATCH" start "$VAULT_DIR" "$VAULT_DIR_TWO" 2>&1)
+MULTI_START_EXIT=$?
+assert_eq "multi-vault start exits 0" "0" "$MULTI_START_EXIT"
+assert_contains "multi-vault start reports vault count" "monitoring 2 vault(s)" "$MULTI_START_OUTPUT"
+
+PIDFILE_VAULT_1=$(sed -n '2p' "$PIDFILE" 2>/dev/null || true)
+PIDFILE_VAULT_2=$(sed -n '3p' "$PIDFILE" 2>/dev/null || true)
+assert_eq "multi-vault pidfile stores first vault" "$VAULT_DIR" "$PIDFILE_VAULT_1"
+assert_eq "multi-vault pidfile stores second vault" "$VAULT_DIR_TWO" "$PIDFILE_VAULT_2"
+
+MULTI_STOP_OUTPUT=$("$PATCHED_WATCH" stop 2>&1)
+MULTI_STOP_EXIT=$?
+assert_eq "multi-vault stop exits 0" "0" "$MULTI_STOP_EXIT"
+assert_contains "multi-vault stop prints pidfile removed" "pidfile removed" "$MULTI_STOP_OUTPUT"
 
 # ---------------------------------------------------------------------------
 # Results

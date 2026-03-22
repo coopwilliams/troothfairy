@@ -15,6 +15,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 VAULT_DIR="${1:-${REPO_ROOT}/orb-vault}"
+VAULT_NAME="$(basename "$VAULT_DIR")"
+VAULT_KEY="$(printf '%s' "$VAULT_DIR" | shasum -a 256 | cut -c1-12)"
 
 SYSTEM_TEMPLATE_FILE="${SCRIPT_DIR}/prompts/system.tmpl.md"
 JOB_TEMPLATE_FILE="${SCRIPT_DIR}/prompts/job.tmpl.md"
@@ -27,7 +29,7 @@ source "${SCRIPT_DIR}/lib/tag_policy.sh" 2>/dev/null || true
 source "${SCRIPT_DIR}/patch_engine.sh" 2>/dev/null || true
 STATUS_DIR="${STATUS_DIR:-$(get_config status_dir /tmp/troothfairy-status 2>/dev/null || echo /tmp/troothfairy-status)}"
 mkdir -p "$STATUS_DIR"
-rm -f "${STATUS_DIR}"/active-*
+rm -f "${STATUS_DIR}/active-${VAULT_KEY}-"*
 
 vtk() { TICKETS_DIR="${VAULT_DIR}/.tickets" tk "$@"; }
 
@@ -114,7 +116,7 @@ record_history() {
     if [[ ${#preview} -gt 60 ]]; then
         preview="${preview:0:57}..."
     fi
-    printf '%s %s #%s %s\t%s\n' "$timestamp" "$success_marker" "$tag_char" "$preview" "$vault_rel" >> "${STATUS_DIR}/history.log"
+    printf '%s %s [%s] #%s %s\t%s\t%s\n' "$timestamp" "$success_marker" "$VAULT_NAME" "$tag_char" "$preview" "$VAULT_NAME" "$vault_rel" >> "${STATUS_DIR}/history.log"
 }
 
 completion_tag_for_tag() {
@@ -247,8 +249,8 @@ while IFS= read -r ticket_id; do
     subagent_tools=$(policy_route_tools "$route")
     route_display_name=$(policy_route_display_name "$route")
 
-    active_desc="#${tag_char} $(tag_preview "$tagged_line")"$'\t'"${vault_rel}"
-    printf '%s\n' "$active_desc" > "${STATUS_DIR}/active-${ticket_id}"
+    active_desc="[${VAULT_NAME}] #${tag_char} $(tag_preview "$tagged_line")"$'\t'"${VAULT_NAME}"$'\t'"${vault_rel}"
+    printf '%s\n' "$active_desc" > "${STATUS_DIR}/active-${VAULT_KEY}-${ticket_id}"
 
     prompt_file="${WORK_DIR}/${ticket_id}.prompt"
     system_prompt_file="${WORK_DIR}/${ticket_id}.system"
@@ -331,7 +333,7 @@ while IFS= read -r ticket_id; do
     JOB_FILES+=("$job_file")
     RESULT_FILES+=("$result_file")
     STATUS_FILES+=("$status_file")
-    ACTIVE_FILES+=("${STATUS_DIR}/active-${ticket_id}")
+    ACTIVE_FILES+=("${STATUS_DIR}/active-${VAULT_KEY}-${ticket_id}")
     RESULT_MARKERS+=("pending")
 
     echo "orchestrator: launched worker for ticket $ticket_id (route: $route, file: $file_basename, pid: $!)"

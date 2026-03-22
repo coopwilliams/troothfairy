@@ -14,7 +14,7 @@ fswatch → watch.sh → dispatcher.sh → orchestrator.sh → claude -p
                                            deterministic vault patching
 ```
 
-- `scripts/watch.sh` — fswatch daemon (start/stop/status)
+- `scripts/watch.sh` — fswatch daemon (start/stop/status, supports multi-vault config)
 - `scripts/dispatcher.sh` — scans vault for open tags, creates one `tk` ticket per tagged block, and deduplicates/reconciles stale open jobs
 - `scripts/orchestrator.sh` — reads block-job tickets, routes them, requests structured JSON results, and applies deterministic file patches
 - `scripts/excerpt_split.sh` — deterministic splitter for excerpt-search results, including file-type formatting hooks
@@ -24,7 +24,7 @@ fswatch → watch.sh → dispatcher.sh → orchestrator.sh → claude -p
 - `scripts/prompts/system.tmpl.md` — system prompt template rendered from structured policy data
 - `scripts/prompts/job.tmpl.md` — per-job prompt template rendered from structured job data
 - `scripts/troothfairy.1s.sh` — SwiftBar menu bar plugin
-- `config.yaml` — vault path, status dir, directory access permissions
+- `config.yaml` — vault path(s), status dir, directory access permissions
 - `scripts/lib/config.sh` — shared config reader
 - `tf-exclusions.md` — files the dispatcher should skip
 - `.claude/skills/excerpt-text/SKILL.md` — excerpt-text skill (injected into #$ subagent prompts)
