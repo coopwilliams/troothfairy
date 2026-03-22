@@ -5,9 +5,10 @@
 # .md file changes and pipes events to the dispatcher.
 #
 # Usage:
-#   watch.sh start [vault_dir]   Start the watcher (vault_dir default: ./orb-vault)
-#   watch.sh stop                Stop the watcher
-#   watch.sh status              Report whether the watcher is running
+#   watch.sh start [vault_dir ...]   Start the watcher
+#   watch.sh stop                    Stop the watcher
+#   watch.sh restart [vault_dir ...] Restart the watcher from config or explicit vaults
+#   watch.sh status                  Report whether the watcher is running
 #
 # Requires: fswatch (https://github.com/emcrisostomo/fswatch)
 
@@ -177,6 +178,7 @@ cmd_start() {
     else
         while IFS= read -r resolved_vault; do
             [[ -n "$resolved_vault" ]] || continue
+            [[ -d "$resolved_vault" ]] || die "vault directory not found: ${resolved_vault}"
             vault_dirs+=("$resolved_vault")
         done < <(resolve_vault_paths 2>/dev/null || true)
     fi
@@ -326,13 +328,22 @@ cmd_status() {
 }
 
 # ---------------------------------------------------------------------------
+# cmd_restart [vault_dir ...]
+# ---------------------------------------------------------------------------
+cmd_restart() {
+    cmd_stop >/dev/null 2>&1 || true
+    cmd_start "$@"
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 usage() {
-    echo "Usage: $(basename "$0") {start [vault_dir ...] | stop | status}"
+    echo "Usage: $(basename "$0") {start [vault_dir ...] | stop | restart [vault_dir ...] | status}"
     echo ""
     echo "  start [vault_dir ...]   Start the fswatch daemon (default: configured vault_path/vaults)"
     echo "  stop                Stop the fswatch daemon"
+    echo "  restart [vault_dir ...] Restart the fswatch daemon (default: configured vault_path/vaults)"
     echo "  status              Check whether the daemon is running"
     exit 1
 }
@@ -348,6 +359,10 @@ case "$1" in
         ;;
     stop)
         cmd_stop
+        ;;
+    restart)
+        shift
+        cmd_restart "$@"
         ;;
     status)
         cmd_status

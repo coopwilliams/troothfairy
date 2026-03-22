@@ -387,6 +387,23 @@ MULTI_STOP_EXIT=$?
 assert_eq "multi-vault stop exits 0" "0" "$MULTI_STOP_EXIT"
 assert_contains "multi-vault stop prints pidfile removed" "pidfile removed" "$MULTI_STOP_OUTPUT"
 
+echo "--- Test: restart reloads watcher with configured vaults"
+
+RESTART_OUTPUT=$("$PATCHED_WATCH" restart "$VAULT_DIR" "$VAULT_DIR_TWO" 2>&1)
+RESTART_EXIT=$?
+assert_eq "restart exits 0" "0" "$RESTART_EXIT"
+assert_contains "restart prints started confirmation" "started" "$RESTART_OUTPUT"
+
+RESTART_PIDFILE_VAULT_1=$(sed -n '2p' "$PIDFILE" 2>/dev/null || true)
+RESTART_PIDFILE_VAULT_2=$(sed -n '3p' "$PIDFILE" 2>/dev/null || true)
+assert_eq "restart pidfile stores first vault" "$VAULT_DIR" "$RESTART_PIDFILE_VAULT_1"
+assert_eq "restart pidfile stores second vault" "$VAULT_DIR_TWO" "$RESTART_PIDFILE_VAULT_2"
+
+RESTART_STOP_OUTPUT=$("$PATCHED_WATCH" stop 2>&1)
+RESTART_STOP_EXIT=$?
+assert_eq "restart cleanup stop exits 0" "0" "$RESTART_STOP_EXIT"
+assert_contains "restart cleanup stop prints pidfile removed" "pidfile removed" "$RESTART_STOP_OUTPUT"
+
 # ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------

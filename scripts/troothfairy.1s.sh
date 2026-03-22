@@ -93,6 +93,7 @@ fi
 # ---------------------------------------------------------------------------
 if $DAEMON_RUNNING; then
     echo "Pause | bash=${WATCH_SH} param1=stop terminal=false refresh=true"
+    echo "Reload Watcher | bash=${WATCH_SH} param1=restart terminal=false refresh=true"
 else
     echo "Start | bash=${WATCH_SH} param1=start terminal=false refresh=true"
 fi

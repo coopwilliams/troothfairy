@@ -115,6 +115,7 @@ Control which domains the agent links to:
 ./scripts/watch.sh start ./orb-vault
 ./scripts/watch.sh start ./vault-a ./vault-b
 ./scripts/watch.sh stop
+./scripts/watch.sh restart
 ./scripts/watch.sh status
 
 # Run the pipeline manually (without the daemon)
